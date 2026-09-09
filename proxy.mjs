@@ -49,6 +49,7 @@ function loadConfig() {
   const defaults = {
     port: 3000,
     host: '0.0.0.0',
+    publicUrl: '',
     apiBase: 'https://api.commandcode.ai',
     projectSlug: 'cc-proxy',
     gatewayApiKey: '',
@@ -86,6 +87,8 @@ function loadConfig() {
   // 环境变量覆写
   if (process.env.PORT) defaults.port = parseInt(process.env.PORT);
   if (process.env.HOST) defaults.host = process.env.HOST;
+  if (process.env.CC_PUBLIC_URL !== undefined) defaults.publicUrl = process.env.CC_PUBLIC_URL;
+  else if (process.env.CONSOLE_PUBLIC_URL !== undefined) defaults.publicUrl = process.env.CONSOLE_PUBLIC_URL;
   if (process.env.CC_API_BASE) defaults.apiBase = process.env.CC_API_BASE;
   if (process.env.PROJECT_SLUG) defaults.projectSlug = process.env.PROJECT_SLUG;
   if (process.env.GATEWAY_API_KEY !== undefined) defaults.gatewayApiKey = process.env.GATEWAY_API_KEY;

@@ -16,11 +16,12 @@ function makeTemporaryDirectory() {
   return mkdtempSync(join(tmpdir(), 'commandcode-proxy-test-'));
 }
 
-function makeRequest(method, path, body = null, cookie = '') {
+function makeRequest(method, path, body = null, cookie = '', extraHeaders = {}) {
   const raw = body === null ? '' : JSON.stringify(body);
   const request = Readable.from(raw ? [Buffer.from(raw)] : []);
   request.method = method;
   request.headers = {
+    ...extraHeaders,
     ...(raw ? { 'content-type': 'application/json' } : {}),
     ...(cookie ? { cookie } : {}),
   };
@@ -43,8 +44,8 @@ function makeResponse() {
   };
 }
 
-async function call(controller, method, path, body = null, cookie = '') {
-  const { request, url } = makeRequest(method, path, body, cookie);
+async function call(controller, method, path, body = null, cookie = '', extraHeaders = {}) {
+  const { request, url } = makeRequest(method, path, body, cookie, extraHeaders);
   const response = makeResponse();
   await controller.handle(request, response, url);
   let payload = {};
@@ -104,7 +105,12 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   assert.equal(login.response.statusCode, 200);
   const cookie = sessionCookie(login.response);
 
-  const firstStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie);
+  const firstStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie, {
+    host: 'proxy.example.com',
+    'x-forwarded-host': 'console.example.com',
+    'x-forwarded-proto': 'https',
+  });
+  assert.equal(new URL(firstStart.payload.loginUrl).searchParams.get('callback'), 'https://console.example.com/callback');
   const firstState = new URL(firstStart.payload.loginUrl).searchParams.get('state');
   await call(controller, 'GET', `/callback?state=${encodeURIComponent(firstState)}&apiKey=user_first&userId=first-user&userName=第一个账号&email=first@example.com`);
   const firstConfig = await call(controller, 'GET', '/admin/api/config', null, cookie);
@@ -156,4 +162,30 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   await call(controller, 'DELETE', `/admin/api/accounts/${encodeURIComponent(deleted.payload.accounts[0].id)}`, null, cookie);
   assert.equal(config.ccApiKey, '');
   assert.equal(existsSync(authFile), false);
+});
+
+test('浏览器登录支持固定公网回调地址', async () => {
+  const directory = makeTemporaryDirectory();
+  const runtimeDir = join(directory, 'runtime');
+  const controller = createAdminController({
+    config: {
+      apiBase: 'https://api.commandcode.ai',
+      gatewayApiKey: 'gateway-pass',
+      gatewayApiKeys: ['gateway-pass'],
+      ccApiKey: '',
+      host: '0.0.0.0',
+      port: 3050,
+      publicUrl: 'https://fixed.example.com/',
+      allowedModelIds: null,
+    },
+    projectDir: directory,
+    runtimeDir,
+    authFile: join(directory, 'auth', 'auth.json'),
+    accountsFile: join(runtimeDir, 'accounts.json'),
+    server: { listening: true },
+  });
+
+  const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
+  const start = await call(controller, 'POST', '/admin/api/auth/start', {}, sessionCookie(login.response));
+  assert.equal(new URL(start.payload.loginUrl).searchParams.get('callback'), 'https://fixed.example.com/callback');
 });

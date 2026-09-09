@@ -1,6 +1,7 @@
 {
   "port": 3050,
   "host": "0.0.0.0",
+  "publicUrl": "",
   "apiKey": "",
   "apiBase": "https://api.commandcode.ai",
   "projectSlug": "cc-proxy",

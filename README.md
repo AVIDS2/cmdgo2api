@@ -82,6 +82,7 @@ commandcode/
 |------|--------|-------------|
 | `port` | `3000` | Listen port (repo config.json ships with `3050`) |
 | `host` | `0.0.0.0` | Listen address |
+| `publicUrl` | `""` | Public origin used for browser auth callbacks; derived from the request when empty |
 | `apiBase` | `https://api.commandcode.ai` | CC API base URL |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | Optional fallback API key (requests can also send it via header) |
@@ -100,6 +101,8 @@ commandcode/
 |----------|-----------|
 | `PORT` | `port` |
 | `HOST` | `host` |
+| `CC_PUBLIC_URL` | `publicUrl`; recommended when using a fixed public domain |
+| `CONSOLE_PUBLIC_URL` | `publicUrl`; compatibility alias for `CC_PUBLIC_URL` |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
 | `GATEWAY_API_KEY` | `gatewayApiKey` |
@@ -129,7 +132,7 @@ The console is available at `/console`; its management API is under `/admin/api`
 - The model manager reads the full catalog from the upstream Provider API. All models are allowed by default; saved restrictions hide models from `/v1/models` and return `HTTP 403` for direct calls.
 - Usage refreshes in the background every 60 seconds while the console is open.
 - Update and restart runs only when the Git worktree is clean, using `git pull --ff-only`, frontend dependency installation, and a production build. Local changes are refused rather than overwritten.
-- Command Code accepts only loopback browser callbacks. The console therefore opens the authorization page from any host but redirects the browser to `http://127.0.0.1:3050/callback`; use the console from the same machine that runs the proxy.
+- Browser authorization now returns to the proxy service instead of always redirecting to the visitor's machine. When `CC_PUBLIC_URL` is not set, the callback is derived from `X-Forwarded-Proto`, `X-Forwarded-Host`, and `Host`; behind a reverse proxy or fixed domain, set `CC_PUBLIC_URL=https://console.example.com` and forward `/callback` to the proxy. HTTPS is recommended for public deployments.
 
 Runtime credentials are stored in `~/.config/commandcode-proxy/credentials.env`, model settings in `~/.config/commandcode-proxy/settings.json`, and multiple account tokens plus cached quotas in `~/.config/commandcode-proxy/accounts.json`. The active account is also mirrored to `~/.commandcode/auth.json` for compatibility. Files are created with restrictive permissions; an older single-account `auth.json` is migrated automatically and must not be committed or copied to a public directory.
 
@@ -480,6 +483,7 @@ Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to the
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
 docker run -d --name cc-proxy -p 3050:3050 \
   -e PORT=3050 \
+  -e CC_PUBLIC_URL=https://console.example.com \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
   ghcr.io/maxeaglet/commandcode-proxy:latest
@@ -494,7 +498,13 @@ docker compose build
 docker compose up -d
 ```
 
-The proxy will listen on `http://0.0.0.0:3050` and provide `/console`. Set `PROXY_PORT` to customize the host port:
+The proxy will listen on `http://0.0.0.0:3050` and provide `/console`. Direct access through the server's public address automatically generates a remote callback. For a reverse proxy or fixed domain, set `CC_PUBLIC_URL`:
+
+```bash
+CC_PUBLIC_URL=https://console.example.com docker compose up -d --build
+```
+
+Set `PROXY_PORT` to customize the host port:
 
 ```bash
 PROXY_PORT=13050 docker compose up -d
@@ -521,6 +531,7 @@ npm run docker:build:multi
 |----------|---------|-------------|
 | `PORT` | `3050` | Container listen port |
 | `PROXY_PORT` | `3050` | Host port (compose only) |
+| `CC_PUBLIC_URL` | empty | Public origin for browser auth callbacks, e.g. `https://console.example.com` |
 | `CC_MAX_BODY_MB` | `100` | Max request body size in MB; oversized requests are rejected with `HTTP 413` |
 
 For container deployments, mount `/root/.config/commandcode-proxy` and `/root/.commandcode` so gateway keys, model settings, multiple account tokens, and cached quotas survive container recreation.

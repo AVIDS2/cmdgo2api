@@ -496,6 +496,49 @@ function isSecureRequest(request) {
   return forwardedProto === 'https' || Boolean(request.socket?.encrypted);
 }
 
+function firstForwardedValue(value) {
+  return text(value).split(',')[0].trim();
+}
+
+function publicOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(text(value));
+  } catch {
+    throw new AdminError('公网地址必须是有效的 HTTP 或 HTTPS URL', 500);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || (parsed.pathname !== '' && parsed.pathname !== '/')) {
+    throw new AdminError('公网地址只能包含 HTTP/HTTPS 协议和域名，例如 https://console.example.com', 500);
+  }
+  return parsed;
+}
+
+function browserCallbackUrl(request, url, config) {
+  const configured = text(config.publicUrl || config.consolePublicUrl);
+  if (configured) {
+    const origin = publicOrigin(configured);
+    origin.pathname = '/callback';
+    return origin.toString();
+  }
+
+  const forwardedProto = firstForwardedValue(request.headers?.['x-forwarded-proto']).toLowerCase();
+  const protocol = forwardedProto
+    ? (forwardedProto.endsWith(':') ? forwardedProto : `${forwardedProto}:`)
+    : (request.socket?.encrypted ? 'https:' : (url.protocol || 'http:'));
+  const host = firstForwardedValue(request.headers?.['x-forwarded-host'])
+    || firstForwardedValue(request.headers?.host)
+    || url.host
+    || `127.0.0.1:${Number(config.port)}`;
+  const origin = publicOrigin(`${protocol}//${host}`);
+  origin.pathname = '/callback';
+  return origin.toString();
+}
+
 function sessionCookie(request, value, maxAge) {
   const attributes = [
     `${CONSOLE_COOKIE_NAME}=${value}`,
@@ -1112,17 +1155,19 @@ export function createAdminController({
     }
 
     if (url.pathname === '/admin/api/auth/start' && request.method === 'POST') {
-      const state = randomBytes(24).toString('base64url');
-      const port = Number(config.port);
-      // Command Code 只接受 localhost 回调；公网控制台仍由浏览器回到代理所在机器。
-      const callback = `http://127.0.0.1:${port}/callback`;
-      const loginUrl = new URL('/studio/auth/cli', CALLBACK_BASE);
-      loginUrl.searchParams.set('callback', callback);
-      loginUrl.searchParams.set('state', state);
-      loginUrl.searchParams.set('mode', 'redirect');
-      loginUrl.searchParams.set('client', 'commandcode-proxy-web');
-      browserSessions.set(state, { createdAt: Date.now(), status: 'pending' });
-      sendJson(response, 200, { ok: true, state, loginUrl: loginUrl.toString(), expiresIn: BROWSER_SESSION_TTL_MS / 1000 });
+      try {
+        const state = randomBytes(24).toString('base64url');
+        const callback = browserCallbackUrl(request, url, config);
+        const loginUrl = new URL('/studio/auth/cli', CALLBACK_BASE);
+        loginUrl.searchParams.set('callback', callback);
+        loginUrl.searchParams.set('state', state);
+        loginUrl.searchParams.set('mode', 'redirect');
+        loginUrl.searchParams.set('client', 'commandcode-proxy-web');
+        browserSessions.set(state, { createdAt: Date.now(), status: 'pending' });
+        sendJson(response, 200, { ok: true, state, loginUrl: loginUrl.toString(), expiresIn: BROWSER_SESSION_TTL_MS / 1000 });
+      } catch (error) {
+        sendError(response, error);
+      }
       return true;
     }
 

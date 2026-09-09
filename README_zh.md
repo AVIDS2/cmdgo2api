@@ -82,6 +82,7 @@ commandcode/
 |------|--------|------|
 | `port` | `3000` | 监听端口（仓库自带 config.json 为 3050） |
 | `host` | `0.0.0.0` | 监听地址 |
+| `publicUrl` | `""` | 浏览器授权回调使用的公网根地址；为空时按请求地址自动推导 |
 | `apiBase` | `https://api.commandcode.ai` | CC API 地址 |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | 可选兜底 API Key（请求也可通过 header 传入） |
@@ -100,6 +101,8 @@ commandcode/
 |------|-----------------|
 | `PORT` | `port` |
 | `HOST` | `host` |
+| `CC_PUBLIC_URL` | `publicUrl`；固定公网域名时推荐设置 |
+| `CONSOLE_PUBLIC_URL` | `publicUrl`；`CC_PUBLIC_URL` 的兼容别名 |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
 | `GATEWAY_API_KEY` | `gatewayApiKey` |
@@ -127,7 +130,7 @@ header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数�
 - 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
 - 用量在控制台存活期间每 60 秒后台异步刷新一次。
 - “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
-- Command Code 只接受本机回调地址；无论从本地还是公网打开控制台，浏览器授权完成后都会回到运行代理的 `http://127.0.0.1:3050/callback`，因此应在代理所在机器的浏览器中使用授权功能。
+- 浏览器授权完成后会回调到代理服务本身，不再固定跳转到访问者本机。未设置 `CC_PUBLIC_URL` 时，程序会根据当前请求的 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `Host` 自动推导；使用反向代理或固定域名时，建议显式设置 `CC_PUBLIC_URL=https://console.example.com`，并确保 `/callback` 能转发到本代理。公网部署建议使用 HTTPS。
 
 运行时敏感文件位于 `~/.config/commandcode-proxy/credentials.env`，模型设置位于同目录的 `settings.json`，多账号 token 与额度快照位于同目录的 `accounts.json`，当前账号兼容写入 `~/.commandcode/auth.json`。程序会以当前用户权限保存这些文件，升级时会自动迁移旧版单账号 `auth.json`，建议不要将它们加入 Git 或复制到公开目录。
 
@@ -478,6 +481,7 @@ CLI 发送图片的格式：
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
 docker run -d --name cc-proxy -p 3050:3050 \
   -e PORT=3050 \
+  -e CC_PUBLIC_URL=https://console.example.com \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
   ghcr.io/maxeaglet/commandcode-proxy:latest
@@ -492,7 +496,13 @@ docker compose build
 docker compose up -d
 ```
 
-代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥，再完成浏览器授权。通过 `PROXY_PORT` 自定义主机端口：
+代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥，再完成浏览器授权。直接通过服务器公网地址访问时会自动生成远程回调；反向代理或固定域名部署时，建议设置 `CC_PUBLIC_URL`：
+
+```bash
+CC_PUBLIC_URL=https://console.example.com docker compose up -d --build
+```
+
+通过 `PROXY_PORT` 自定义主机端口：
 
 ```bash
 PROXY_PORT=13050 docker compose up -d
@@ -519,6 +529,7 @@ npm run docker:build:multi
 |------|--------|------|
 | `PORT` | `3050` | 容器内监听端口 |
 | `PROXY_PORT` | `3050` | 主机映射端口（仅 compose） |
+| `CC_PUBLIC_URL` | 空 | 浏览器授权回调使用的公网根地址，例如 `https://console.example.com` |
 | `CC_MAX_BODY_MB` | `100` | 请求体大小上限（MB），超限请求返回 `HTTP 413` |
 
 容器部署建议挂载 `/root/.config/commandcode-proxy` 和 `/root/.commandcode`，否则容器删除后会丢失网关密钥、模型权限、多账号 token 和额度快照。
