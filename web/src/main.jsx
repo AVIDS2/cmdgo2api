@@ -318,7 +318,7 @@ function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefres
   return (
     <section className="accounts-section">
       <SectionHeading
-        eyebrow="Saved accounts"
+        eyebrow="已保存账号"
         title="账号"
         description="已保存的账号 token 只写入本机运行目录。"
         action={(
