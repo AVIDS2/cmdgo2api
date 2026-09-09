@@ -98,16 +98,17 @@ function Brand({ compact = false }) {
   );
 }
 
-function SecretInput({ id, value, onChange, shown, onToggle, placeholder, autoFocus = false }) {
+function SecretInput({ id, name, value, onChange, shown, onToggle, placeholder, autoFocus = false, autoComplete = 'off' }) {
   return (
     <div className="secret-input-wrap">
       <Input
         id={id}
+        name={name}
         type={shown ? 'text' : 'password'}
         value={value}
         onChange={onChange}
         placeholder={placeholder}
-        autoComplete="off"
+        autoComplete={autoComplete}
         autoFocus={autoFocus}
       />
       <Button
@@ -308,11 +309,13 @@ function AuthBanner({ session, onOpen, onCancel, onSubmitToken, token, tokenShow
           <label htmlFor="remote-commandcode-token">Command Code API Key</label>
           <SecretInput
             id="remote-commandcode-token"
+            name="commandcode-api-key"
             value={token}
             onChange={onTokenChange}
             shown={tokenShown}
             onToggle={() => onToggleToken(!tokenShown)}
             placeholder="粘贴 API Key，不会显示在地址栏"
+            autoComplete="new-password"
             autoFocus
           />
           <Button type="submit" size="sm" disabled={tokenSaving || !token.trim()}>
