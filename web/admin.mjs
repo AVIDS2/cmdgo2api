@@ -46,6 +46,12 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function text(value) {
   return typeof value === 'string' ? value.trim() : String(value ?? '').trim();
 }
@@ -339,8 +345,11 @@ function readAuthMetadata(authFile) {
 
 function windowSnapshot(value) {
   const source = isObject(value) ? value : {};
-  const used = number(source.used);
-  const cap = number(source.cap);
+  const usedValue = finiteNumber(source.used);
+  const capValue = finiteNumber(source.cap);
+  const used = usedValue ?? 0;
+  const cap = capValue ?? 0;
+  const known = (usedValue !== null && capValue !== null && capValue > 0) || Boolean(source.exceeded);
   return {
     used,
     cap,
@@ -348,6 +357,7 @@ function windowSnapshot(value) {
     ratio: cap > 0 ? Math.min(1, Math.max(0, used / cap)) : 0,
     resetAt: source.resetAt ?? null,
     exceeded: Boolean(source.exceeded),
+    known,
   };
 }
 
@@ -366,6 +376,7 @@ function normalizeUsage({ whoami, credits, subscription, summary }) {
   const user = isObject(whoami?.user) ? whoami.user : {};
   const creditData = isObject(credits?.credits) ? credits.credits : {};
   const limits = isObject(credits?.windowLimits) ? credits.windowLimits : {};
+  const monthlyCredits = finiteNumber(creditData.monthlyCredits);
   return {
     account: {
       id: text(user.id || user.userId),
@@ -375,14 +386,43 @@ function normalizeUsage({ whoami, credits, subscription, summary }) {
     plan: planName(subscription),
     monthly: {
       used: number(summary?.totalCost),
-      remaining: number(creditData.monthlyCredits),
+      remaining: monthlyCredits ?? 0,
       totalCount: number(summary?.totalCount),
+      known: monthlyCredits !== null,
     },
     fiveHour: windowSnapshot(limits.fiveHour),
     weekly: windowSnapshot(limits.weekly),
     periodStart: subscription?.currentPeriodStart ?? null,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+const USAGE_QUOTA_KEYS = ['fiveHour', 'weekly', 'monthly'];
+
+function quotaKnown(quota, key) {
+  if (!isObject(quota)) return false;
+  if (hasOwn(quota, 'known')) return quota.known === true;
+  if (key === 'monthly') return finiteNumber(quota.remaining) !== null;
+  const cap = finiteNumber(quota.cap);
+  return (cap !== null && cap > 0) || Boolean(quota.exceeded);
+}
+
+function quotaIsFull(quota, key) {
+  if (!quotaKnown(quota, key)) return false;
+  if (quota.exceeded === true) return true;
+  const remaining = finiteNumber(quota.remaining);
+  if (remaining !== null && remaining <= 0) return true;
+  const ratio = finiteNumber(quota.ratio);
+  return ratio !== null && ratio >= 1;
+}
+
+function usageHasExhaustedQuota(usage) {
+  return isObject(usage) && USAGE_QUOTA_KEYS.some((key) => quotaIsFull(usage[key], key));
+}
+
+function usageHasAvailableQuotas(usage) {
+  return isObject(usage)
+    && USAGE_QUOTA_KEYS.every((key) => quotaKnown(usage[key], key) && !quotaIsFull(usage[key], key));
 }
 
 async function fetchJson(url, apiKey) {
@@ -842,6 +882,46 @@ export function createAdminController({
     return accountStore.accounts[index];
   }
 
+  function mergeAccountUsage(account, usage) {
+    return {
+      ...account,
+      userId: usage.account.id || account.userId,
+      userName: usage.account.userName || account.userName,
+      email: usage.account.email || account.email,
+      usage,
+      usageError: '',
+    };
+  }
+
+  function hasAvailableQuotas(account) {
+    return Boolean(account && !account.usageError && usageHasAvailableQuotas(account.usage));
+  }
+
+  function nextAvailableAccount(accountId) {
+    const currentIndex = accountStore.accounts.findIndex((account) => account.id === accountId);
+    if (currentIndex < 0) return null;
+    for (let offset = 1; offset < accountStore.accounts.length; offset += 1) {
+      const account = accountStore.accounts[(currentIndex + offset) % accountStore.accounts.length];
+      if (hasAvailableQuotas(account)) return account;
+    }
+    return null;
+  }
+
+  function autoSwitchExhaustedAccount(accountId) {
+    const current = findAccount(accountId);
+    if (!current || accountStore.activeAccountId !== accountId || !usageHasExhaustedQuota(current.usage)) {
+      return { switched: false, account: activeAccount() };
+    }
+    const next = nextAvailableAccount(accountId);
+    if (!next) return { switched: false, account: current };
+    activateStoredAccount(next.id);
+    return {
+      switched: true,
+      previousAccountId: accountId,
+      account: activeAccount(),
+    };
+  }
+
   function initializeAccountStore() {
     if (accountStore.migrated || !existsSync(accountsFile)) {
       accountStore = writeAccountStore(accountsFile, accountStore);
@@ -1157,23 +1237,31 @@ export function createAdminController({
     if (url.pathname === '/admin/api/accounts/refresh' && request.method === 'POST') {
       try {
         if (accountStore.accounts.length === 0) throw new AdminError('还没有保存的 Command Code 账号', 400);
+        const activeAccountId = accountStore.activeAccountId;
         const results = await Promise.all(accountStore.accounts.map(async (account) => {
           try {
             const usage = await readUsage(config, account.apiKey);
             return {
-              ...account,
-              userId: usage.account.id || account.userId,
-              userName: usage.account.userName || account.userName,
-              email: usage.account.email || account.email,
-              usage,
-              usageError: '',
+              account: mergeAccountUsage(account, usage),
+              refreshed: true,
             };
           } catch (error) {
-            return { ...account, usageError: error instanceof AdminError ? error.message : '用量同步失败' };
+            return {
+              account: { ...account, usageError: error instanceof AdminError ? error.message : '用量同步失败' },
+              refreshed: false,
+            };
           }
         }));
-        accountStore = persistAccounts({ ...accountStore, accounts: results });
-        sendJson(response, 200, { ok: true, ...accountPayload() });
+        accountStore = persistAccounts({ ...accountStore, accounts: results.map((result) => result.account) });
+        const activeWasRefreshed = results.some((result) => result.refreshed && result.account.id === activeAccountId);
+        const switchResult = activeWasRefreshed
+          ? autoSwitchExhaustedAccount(activeAccountId)
+          : { switched: false, account: activeAccount() };
+        sendJson(response, 200, {
+          ok: true,
+          autoSwitched: switchResult.switched,
+          ...accountPayload(),
+        });
       } catch (error) {
         sendError(response, error);
       }
@@ -1245,21 +1333,23 @@ export function createAdminController({
     }
 
     if (url.pathname === '/admin/api/usage' && request.method === 'GET') {
+      let requestedAccountId = '';
       try {
         const account = activeAccount();
         if (!account?.apiKey) throw new AdminError('请先完成 Command Code 浏览器登录');
+        requestedAccountId = account.id;
         const usage = await readUsage(config, account.apiKey);
-        updateAccount(account.id, (current) => ({
-          ...current,
-          userId: usage.account.id || current.userId,
-          userName: usage.account.userName || current.userName,
-          email: usage.account.email || current.email,
-          usage,
-          usageError: '',
-        }));
-        sendJson(response, 200, { ok: true, usage, ...accountPayload() });
+        updateAccount(requestedAccountId, (current) => mergeAccountUsage(current, usage));
+        const switchResult = autoSwitchExhaustedAccount(requestedAccountId);
+        const selected = switchResult.account || activeAccount();
+        sendJson(response, 200, {
+          ok: true,
+          usage: selected?.usage || usage,
+          autoSwitched: switchResult.switched,
+          ...accountPayload(),
+        });
       } catch (error) {
-        const account = activeAccount();
+        const account = findAccount(requestedAccountId) || activeAccount();
         if (account) updateAccount(account.id, (current) => ({ ...current, usageError: error instanceof AdminError ? error.message : '用量同步失败' }));
         sendError(response, error);
       }
@@ -1497,6 +1587,8 @@ export {
   readAccountStore,
   readRuntimeCredentials,
   readRuntimeSettings,
+  usageHasAvailableQuotas,
+  usageHasExhaustedQuota,
   writeAccountStore,
   windowSnapshot,
 };

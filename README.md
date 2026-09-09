@@ -130,6 +130,7 @@ The console is available at `/console`; its management API is under `/admin/api`
 - The first gateway key is the public console password. Deleting it promotes the next key; deleting the last key returns to first-time setup.
 - Add or delete gateway keys without restarting the process. The first key can also be replaced, which invalidates console sessions.
 - Use **Browser login** to store multiple Command Code account tokens locally. The account list supports one-click switching, deletion, and refreshing all accounts; each row shows only the remaining five-hour, weekly, and total quotas. Switching updates the proxy's active upstream token immediately without a restart.
+- When any of the active account's five-hour, weekly, or monthly quotas reaches 100%, the console automatically selects the next account in list order whose three quota values are known and not full; it wraps to the beginning, and skips accounts with unknown or failed usage data.
 - The model manager reads the full catalog from the upstream Provider API. All models are allowed by default; saved restrictions hide models from `/v1/models` and return `HTTP 403` for direct calls.
 - Usage refreshes in the background every 60 seconds while the console is open.
 - Update and restart runs only when the Git worktree is clean, using `git pull --ff-only`, frontend dependency installation, and a production build. Local changes are refused rather than overwritten.

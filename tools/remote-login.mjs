@@ -9,7 +9,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 export function browserLaunchSpec(url, platform = process.platform) {
   const target = String(url);
-  if (platform === 'win32') return { command: 'explorer.exe', args: [target] };
+  if (platform === 'win32') return { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', target] };
   if (platform === 'darwin') return { command: 'open', args: [target] };
   return { command: 'xdg-open', args: [target] };
 }

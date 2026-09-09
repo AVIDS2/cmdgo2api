@@ -993,6 +993,10 @@ function App() {
       if (data.accounts) {
         setConfig((current) => ({ ...(current || {}), accounts: data.accounts, activeAccountId: data.activeAccountId }));
       }
+      if (data.autoSwitched) {
+        setActionMessage('当前账号额度已用尽，已自动切换到可用账号。');
+        window.setTimeout(() => setActionMessage(''), 3500);
+      }
       setError('');
     } catch (caught) {
       if (!handleAuthError(caught)) setError(caught.message);
@@ -1355,7 +1359,9 @@ function App() {
       const data = await request('/accounts/refresh', { method: 'POST', body: '{}' });
       applyAccountPayload(data);
       const failed = (data.accounts || []).filter((account) => account.usageError).length;
-      setActionMessage(failed ? `${failed} 个账号用量同步失败。` : '所有账号用量已刷新。');
+      setActionMessage(data.autoSwitched
+        ? '当前账号额度已用尽，已自动切换到可用账号。'
+        : (failed ? `${failed} 个账号用量同步失败。` : '所有账号用量已刷新。'));
       window.setTimeout(() => setActionMessage(''), 3500);
     } catch (caught) {
       if (!handleAuthError(caught)) setError(caught.message);

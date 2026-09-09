@@ -10,6 +10,8 @@ import {
   createAdminController,
   readAccountStore,
   readRuntimeCredentials,
+  usageHasAvailableQuotas,
+  usageHasExhaustedQuota,
   writeAccountStore,
 } from '../web/admin.mjs';
 
@@ -20,8 +22,8 @@ function makeTemporaryDirectory() {
 test('Windows 授权助手会把完整授权地址作为一个参数打开', () => {
   const loginUrl = 'https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A41234%2Fcallback&state=test-state&mode=redirect&client=commandcode-proxy-bridge';
   assert.deepEqual(browserLaunchSpec(loginUrl, 'win32'), {
-    command: 'explorer.exe',
-    args: [loginUrl],
+    command: 'rundll32.exe',
+    args: ['url.dll,FileProtocolHandler', loginUrl],
   });
 });
 
@@ -69,6 +71,188 @@ async function call(controller, method, path, body = null, cookie = '', extraHea
 function sessionCookie(response) {
   return response.headers['Set-Cookie'].split(';', 1)[0];
 }
+
+function makeStoredUsage({ fiveHourRemaining = 8, weeklyRemaining = 16, monthlyRemaining = 100 } = {}) {
+  const makeWindow = (remaining, cap) => ({
+    used: cap - remaining,
+    cap,
+    remaining,
+    ratio: (cap - remaining) / cap,
+    resetAt: 1_700_000_000,
+    exceeded: remaining <= 0,
+    known: true,
+  });
+  return {
+    account: { id: 'stored-user', userName: '保存账号', email: 'stored@example.com' },
+    plan: 'Pro',
+    monthly: { used: 0, remaining: monthlyRemaining, totalCount: 0, known: true },
+    fiveHour: makeWindow(fiveHourRemaining, 10),
+    weekly: makeWindow(weeklyRemaining, 20),
+    periodStart: '2026-01-01T00:00:00.000Z',
+    fetchedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function makeUsageController(accounts, activeAccountId = accounts[0]?.id) {
+  const directory = makeTemporaryDirectory();
+  const runtimeDir = join(directory, 'runtime');
+  const authFile = join(directory, 'auth', 'auth.json');
+  const accountsFile = join(runtimeDir, 'accounts.json');
+  writeAccountStore(accountsFile, { activeAccountId, accounts });
+  const config = {
+    apiBase: 'https://api.commandcode.ai',
+    gatewayApiKey: 'gateway-pass',
+    gatewayApiKeys: ['gateway-pass'],
+    ccApiKey: '',
+    apiKey: '',
+    host: '127.0.0.1',
+    port: 3050,
+    allowedModelIds: null,
+  };
+  const controller = createAdminController({
+    config,
+    projectDir: directory,
+    runtimeDir,
+    authFile,
+    accountsFile,
+    server: { listening: true },
+  });
+  return { controller, config, runtimeDir };
+}
+
+function makeUsageFetch(states) {
+  return async (url, options = {}) => {
+    const apiKey = options.headers?.Authorization?.replace(/^Bearer /, '');
+    const state = states[apiKey];
+    assert.ok(state, `没有为 ${apiKey} 设置测试用量`);
+    const path = String(url);
+    let payload;
+    if (path.includes('/alpha/whoami')) {
+      payload = { user: { id: state.userId, userName: state.userName, email: state.email }, org: { id: `org-${state.userId}` } };
+    } else if (path.includes('/alpha/billing/credits')) {
+      payload = {
+        credits: { monthlyCredits: state.monthlyCredits },
+        windowLimits: {
+          fiveHour: { used: state.fiveHourUsed, cap: state.fiveHourCap, resetAt: 1_700_000_000 },
+          weekly: { used: state.weeklyUsed, cap: state.weeklyCap, resetAt: 1_700_100_000 },
+        },
+      };
+    } else if (path.includes('/alpha/billing/subscriptions')) {
+      payload = { data: { planId: 'individual-pro', currentPeriodStart: '2026-01-01T00:00:00.000Z' } };
+    } else {
+      payload = { totalCost: 3, totalCount: 5 };
+    }
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+}
+
+function makeUsageState(userId, userName, options = {}) {
+  return {
+    userId,
+    userName,
+    email: `${userId}@example.com`,
+    fiveHourUsed: 2,
+    fiveHourCap: 10,
+    weeklyUsed: 4,
+    weeklyCap: 20,
+    monthlyCredits: 100,
+    ...options,
+  };
+}
+
+test('三个额度窗口的满额判定要求数据完整，且任一窗口满额即视为耗尽', () => {
+  for (const key of ['fiveHour', 'weekly', 'monthly']) {
+    const usage = makeStoredUsage();
+    if (key === 'fiveHour') usage.fiveHour = makeStoredUsage({ fiveHourRemaining: 0 }).fiveHour;
+    if (key === 'weekly') usage.weekly = makeStoredUsage({ weeklyRemaining: 0 }).weekly;
+    if (key === 'monthly') usage.monthly = { ...usage.monthly, remaining: 0 };
+    assert.equal(usageHasExhaustedQuota(usage), true, `${key} 满额应触发耗尽判定`);
+    assert.equal(usageHasAvailableQuotas(usage), false, `${key} 满额时不应视为可用账号`);
+  }
+  assert.equal(usageHasAvailableQuotas({ fiveHour: {}, weekly: {}, monthly: {} }), false);
+});
+
+test('当前账号任一额度窗口用尽时自动切换到下一个可用账号', async () => {
+  const first = { id: 'account-first', apiKey: 'user_first', userId: 'first-user', userName: '第一个账号', usage: makeStoredUsage({ fiveHourRemaining: 1 }) };
+  const second = { id: 'account-second', apiKey: 'user_second', userId: 'second-user', userName: '第二个账号', usage: makeStoredUsage() };
+  const { controller, config, runtimeDir } = makeUsageController([first, second]);
+  const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
+  const cookie = sessionCookie(login.response);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = makeUsageFetch({
+    user_first: makeUsageState('first-user', '第一个账号', { fiveHourUsed: 10 }),
+  });
+  try {
+    const result = await call(controller, 'GET', '/admin/api/usage', null, cookie);
+    assert.equal(result.response.statusCode, 200);
+    assert.equal(result.payload.autoSwitched, true);
+    assert.equal(result.payload.accounts.find((account) => account.active).userName, '第二个账号');
+    assert.deepEqual(result.payload.usage, result.payload.accounts.find((account) => account.active).usage);
+    assert.equal(config.ccApiKey, 'user_second');
+    assert.equal(readRuntimeCredentials(runtimeDir).CC_API_KEY, 'user_second');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('没有三类额度都未满的账号时不会自动切换', async () => {
+  const first = { id: 'account-first', apiKey: 'user_first', userId: 'first-user', userName: '第一个账号', usage: makeStoredUsage() };
+  const second = { id: 'account-second', apiKey: 'user_second', userId: 'second-user', userName: '第二个账号', usage: makeStoredUsage({ weeklyRemaining: 0 }) };
+  const { controller, config } = makeUsageController([first, second]);
+  const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
+  const cookie = sessionCookie(login.response);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = makeUsageFetch({
+    user_first: makeUsageState('first-user', '第一个账号', { monthlyCredits: 0 }),
+  });
+  try {
+    const result = await call(controller, 'GET', '/admin/api/usage', null, cookie);
+    assert.equal(result.response.statusCode, 200);
+    assert.equal(result.payload.autoSwitched, false);
+    assert.equal(result.payload.accounts.find((account) => account.active).userName, '第一个账号');
+    assert.equal(config.ccApiKey, 'user_first');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('刷新全部账号时按列表顺序切换，并在列表末尾循环查找', async () => {
+  const first = { id: 'account-first', apiKey: 'user_first', userId: 'first-user', userName: '第一个账号', usage: makeStoredUsage() };
+  const second = { id: 'account-second', apiKey: 'user_second', userId: 'second-user', userName: '第二个账号', usage: makeStoredUsage({ fiveHourRemaining: 0 }) };
+  const third = { id: 'account-third', apiKey: 'user_third', userId: 'third-user', userName: '第三个账号', usage: makeStoredUsage() };
+  const { controller, config } = makeUsageController([first, second, third], second.id);
+  const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
+  const cookie = sessionCookie(login.response);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = makeUsageFetch({
+    user_first: makeUsageState('first-user', '第一个账号'),
+    user_second: makeUsageState('second-user', '第二个账号', { weeklyUsed: 20 }),
+    user_third: makeUsageState('third-user', '第三个账号'),
+  });
+  try {
+    const result = await call(controller, 'POST', '/admin/api/accounts/refresh', {}, cookie);
+    assert.equal(result.response.statusCode, 200);
+    assert.equal(result.payload.autoSwitched, true);
+    assert.equal(result.payload.accounts.find((account) => account.active).userName, '第三个账号');
+    assert.equal(config.ccApiKey, 'user_third');
+
+    const secondOnly = { id: 'account-second-only', apiKey: 'user_second_only', userId: 'second-only-user', userName: '第二个账号', usage: makeStoredUsage({ fiveHourRemaining: 0 }) };
+    const firstOnly = { id: 'account-first-only', apiKey: 'user_first_only', userId: 'first-only-user', userName: '第一个账号', usage: makeStoredUsage() };
+    const wrapped = makeUsageController([firstOnly, secondOnly], secondOnly.id);
+    const wrappedLogin = await call(wrapped.controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
+    const wrappedCookie = sessionCookie(wrappedLogin.response);
+    globalThis.fetch = makeUsageFetch({
+      user_second_only: makeUsageState('second-only-user', '第二个账号', { fiveHourUsed: 10 }),
+      user_first_only: makeUsageState('first-only-user', '第一个账号'),
+    });
+    const wrappedResult = await call(wrapped.controller, 'POST', '/admin/api/accounts/refresh', {}, wrappedCookie);
+    assert.equal(wrappedResult.payload.autoSwitched, true);
+    assert.equal(wrappedResult.payload.accounts.find((account) => account.active).userName, '第一个账号');
+    assert.equal(wrapped.config.ccApiKey, 'user_first_only');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test('账号库可以从旧版 auth.json 迁移并保存当前账号', () => {
   const directory = makeTemporaryDirectory();
