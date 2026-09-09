@@ -164,7 +164,7 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   assert.equal(existsSync(authFile), false);
 });
 
-test('浏览器登录支持固定公网回调地址', async () => {
+test('浏览器登录同时支持本地和远程回调地址', async () => {
   const directory = makeTemporaryDirectory();
   const runtimeDir = join(directory, 'runtime');
   const controller = createAdminController({
@@ -186,6 +186,13 @@ test('浏览器登录支持固定公网回调地址', async () => {
   });
 
   const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
-  const start = await call(controller, 'POST', '/admin/api/auth/start', {}, sessionCookie(login.response));
-  assert.equal(new URL(start.payload.loginUrl).searchParams.get('callback'), 'https://fixed.example.com/callback');
+  const cookie = sessionCookie(login.response);
+  const localStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie);
+  assert.equal(new URL(localStart.payload.loginUrl).searchParams.get('callback'), 'http://127.0.0.1:3050/callback');
+  const remoteStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie, {
+    host: 'proxy.internal:3050',
+    'x-forwarded-host': 'fixed.example.com',
+    'x-forwarded-proto': 'https',
+  });
+  assert.equal(new URL(remoteStart.payload.loginUrl).searchParams.get('callback'), 'https://fixed.example.com/callback');
 });

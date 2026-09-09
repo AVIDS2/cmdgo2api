@@ -130,7 +130,7 @@ header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数�
 - 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
 - 用量在控制台存活期间每 60 秒后台异步刷新一次。
 - “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
-- 浏览器授权完成后会回调到代理服务本身，不再固定跳转到访问者本机。未设置 `CC_PUBLIC_URL` 时，程序会根据当前请求的 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `Host` 自动推导；使用反向代理或固定域名时，建议显式设置 `CC_PUBLIC_URL=https://console.example.com`，并确保 `/callback` 能转发到本代理。公网部署建议使用 HTTPS。
+- 浏览器授权完成后会回调到代理服务本身，不再固定跳转到访问者本机。未设置 `CC_PUBLIC_URL` 时，程序会根据当前请求的 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `Host` 自动推导；使用反向代理或固定域名时，建议显式设置 `CC_PUBLIC_URL=https://console.example.com`，并确保 `/callback` 能转发到本代理。设置公网地址后，从 `127.0.0.1`、`localhost` 或 `::1` 打开的本地控制台仍会优先使用本地回调，远程控制台使用公网回调。公网部署建议使用 HTTPS。
 
 运行时敏感文件位于 `~/.config/commandcode-proxy/credentials.env`，模型设置位于同目录的 `settings.json`，多账号 token 与额度快照位于同目录的 `accounts.json`，当前账号兼容写入 `~/.commandcode/auth.json`。程序会以当前用户权限保存这些文件，升级时会自动迁移旧版单账号 `auth.json`，建议不要将它们加入 Git 或复制到公开目录。
 

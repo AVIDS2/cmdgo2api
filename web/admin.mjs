@@ -518,14 +518,20 @@ function publicOrigin(value) {
   return parsed;
 }
 
-function browserCallbackUrl(request, url, config) {
-  const configured = text(config.publicUrl || config.consolePublicUrl);
-  if (configured) {
-    const origin = publicOrigin(configured);
-    origin.pathname = '/callback';
-    return origin.toString();
+function isLoopbackHost(value) {
+  let hostname;
+  try {
+    hostname = new URL(`http://${text(value)}`).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
   }
+  return hostname === 'localhost'
+    || hostname === '::1'
+    || hostname === '0:0:0:0:0:0:0:1'
+    || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+}
 
+function browserCallbackUrl(request, url, config) {
   const forwardedProto = firstForwardedValue(request.headers?.['x-forwarded-proto']).toLowerCase();
   const protocol = forwardedProto
     ? (forwardedProto.endsWith(':') ? forwardedProto : `${forwardedProto}:`)
@@ -534,6 +540,12 @@ function browserCallbackUrl(request, url, config) {
     || firstForwardedValue(request.headers?.host)
     || url.host
     || `127.0.0.1:${Number(config.port)}`;
+  const configured = text(config.publicUrl || config.consolePublicUrl);
+  if (configured && !isLoopbackHost(host)) {
+    const origin = publicOrigin(configured);
+    origin.pathname = '/callback';
+    return origin.toString();
+  }
   const origin = publicOrigin(`${protocol}//${host}`);
   origin.pathname = '/callback';
   return origin.toString();
