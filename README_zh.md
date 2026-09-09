@@ -2,29 +2,57 @@
 
 > [English Docs](README.md)
 
-将 Command Code API 转换为 OpenAI / Anthropic 兼容接口的反代代理。单文件，零外部依赖。
+将 Command Code API 转换为 OpenAI / Anthropic 兼容接口的反代代理。核心代理保持单文件结构；Web 控制台作为独立的可选管理层提供。
 
 基于对官方 CLI 网络流量的分析，精确还原了 Command Code API 的请求协议（含设备指纹与生命周期预请求），并实现了多层兼容适配。
 
-**完整功能**：OpenAI Chat Completions + Anthropic Messages API | 流式/非流式输出 | 工具调用 (tool_use) | 多模态图片输入 | 推理强度 (reasoning_effort) | 动态模型列表 | 缓存命中指标 | 设备指纹伪装（per-key 绑定、自动刷新）| `x-api-key` 鉴权（Anthropic SDK）| 客户端断连检测（上游中止） | 零输出 → 429 自动重试 | 连续超时 → 429 自动重试 | 隐私保护日志
+**完整功能**：OpenAI Chat Completions + Anthropic Messages API | 流式/非流式输出 | 工具调用 (tool_use) | 多模态图片输入 | 推理强度 (reasoning_effort) | 上游动态模型目录 | 控制台模型白名单 | 多网关密钥 | 多账号 token 暂存与一键切换 | 每个账号显示 5 小时/一周/总额度剩余 | 公网控制台 Cookie 登录 | Command Code 浏览器授权 | 用量每分钟异步刷新 | 项目自动更新并重启 | 缓存命中指标 | 设备指纹伪装（per-key 绑定、自动刷新）| `x-api-key` 鉴权（Anthropic SDK）| 客户端断连检测（上游中止） | 零输出 → 429 自动重试 | 连续超时 → 429 自动重试 | 隐私保护日志
 
 **社区**: [Linux.do](https://linux.do) — 一个友好的中文技术社区。
 
 ## 快速开始
 
 ```bash
-npm start        # 启动（仓库自带 config.json，监听 http://0.0.0.0:3050）
-npm run dev      # watch 模式（文件修改自动重启）
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
+npm start        # 启动，监听 http://0.0.0.0:3050
 ```
 
-API Key 通过 `Authorization` 请求头（Anthropic SDK 可用 `x-api-key`）传入，**无需配置到文件中**。Key 必须以 `user_` 开头（自动匹配任意前缀，如 `Bearer token_user_xxx`）：
+打开 `http://127.0.0.1:3050/console`。首次没有网关密钥时，控制台会要求设置第一个密钥；设置完成后它既是公网控制台登录密码，也是第一个代理访问密钥。登录控制台后点击“浏览器登录”，按照 Command Code 官方页面完成授权。
+
+配置了网关密钥后，API 请求通过 `Authorization: Bearer <网关密钥>` 传入（Anthropic SDK 可用 `x-api-key`）。没有配置网关密钥时，仍兼容直接传入 `user_` 开头的上游 API Key：
 
 ```bash
 curl http://127.0.0.1:3050/v1/chat/completions \
-  -H "Authorization: Bearer user_xxxxxxxxx" \
+  -H "Authorization: Bearer <网关密钥>" \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}'
 ```
+
+## 快速部署
+
+### 源码部署
+
+需要 Node.js 18 或更高版本。首次部署执行一次前端依赖安装和构建，之后直接启动代理：
+
+```bash
+git clone https://git.1dea.top/aidea/cmd2api.git
+cd cmd2api
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
+npm start
+```
+
+启动后访问 `http://127.0.0.1:3050/console`，设置网关密钥，再点击“添加账号”完成 Command Code 官方浏览器授权。账号 token、网关密钥和额度快照会保存在运行环境中，升级或重建容器时应保留对应数据目录。
+
+### Docker Compose
+
+```bash
+docker compose up -d --build
+docker compose logs -f proxy
+```
+
+默认访问端口为 `3050`，可通过 `PROXY_PORT=13050 docker compose up -d --build` 修改主机端口。Compose 已挂载运行时目录和账号目录，停止容器后重新启动不会丢失已保存账号。
 
 ## 文件结构
 
@@ -34,6 +62,7 @@ commandcode/
 ├── LICENSE               # MIT License
 ├── package.json          # npm start / npm run dev
 ├── proxy.mjs             # 单文件核心代理（~1900 行）
+├── web/                  # Web 控制台、管理 API 和前端构建工程
 ├── Dockerfile            # 容器构建文件（node:22-alpine）
 ├── docker-compose.yml    # 容器编排
 ├── .dockerignore         # 构建上下文排除规则
@@ -56,6 +85,9 @@ commandcode/
 | `apiBase` | `https://api.commandcode.ai` | CC API 地址 |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | 可选兜底 API Key（请求也可通过 header 传入） |
+| `gatewayApiKey` | `""` | 兼容旧配置的单个网关密钥；推荐通过 Web 控制台管理多个密钥 |
+| `gatewayApiKeys` | `[]` | 可选网关密钥数组；第一个密钥也是控制台密码 |
+| `allowedModelIds` | `null` | 可选模型白名单；`null` 表示允许全部模型，控制台设置会写入运行目录 |
 | `logFile` | `""` | 日志文件路径（空=仅控制台） |
 | `logLevel` | `info` | 日志级别 |
 | `useProviderModels` | `true` | 从 Provider API 动态拉取模型列表 |
@@ -70,6 +102,9 @@ commandcode/
 | `HOST` | `host` |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
+| `GATEWAY_API_KEY` | `gatewayApiKey` |
+| `GATEWAY_API_KEYS_JSON` | `gatewayApiKeys`（高级用法） |
+| `CC_API_KEY` | Command Code 上游 API Key |
 | `LOG_FILE` | `logFile` |
 | `CC_USE_PROVIDER_MODELS` | `useProviderModels` |
 | `CMD_ZDR` | `zdr`（`1` 开启） |
@@ -79,6 +114,22 @@ commandcode/
 header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数据留存和上游可用性仍由上游服务决定。
 
 **请求体上限**：独立于 `config.json` —— 超过 **100MB** 的请求会被拒绝并返回 `HTTP 413`（连接保持可排空，不会直接 reset）。可用 `CC_MAX_BODY_MB`（正整数，单位 MB）覆盖。
+
+配置网关密钥后，客户端使用任意一个网关密钥访问本代理，代理使用 `CC_API_KEY` 访问 Command Code；两者是不同的密钥。未配置网关密钥时，仍兼容客户端直接传入 `user_...` 上游密钥。
+
+### Web 控制台
+
+控制台地址为 `/console`，管理接口位于 `/admin/api`。控制台默认只开放首次设置、登录和服务状态接口；完成首次设置后，密钥、用量、模型权限、重启和更新操作都需要登录 Cookie。
+
+- 第一个网关密钥用于公网控制台登录；删除第一个密钥后，下一个密钥会提升为新的登录密码。
+- 可以添加多个网关密钥，也可以删除任意密钥；删除最后一个密钥后会回到首次设置页面。
+- 可通过“浏览器登录”暂存多个 Command Code 账号 token，账号列表支持一键切换、删除和刷新全部账号用量；每个账号右侧只显示 5 小时、一周、总额度的剩余值。切换账号会立即更新代理使用的上游 token，不需要重启。
+- 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
+- 用量在控制台存活期间每 60 秒后台异步刷新一次。
+- “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
+- Command Code 只接受本机回调地址；无论从本地还是公网打开控制台，浏览器授权完成后都会回到运行代理的 `http://127.0.0.1:3050/callback`，因此应在代理所在机器的浏览器中使用授权功能。
+
+运行时敏感文件位于 `~/.config/commandcode-proxy/credentials.env`，模型设置位于同目录的 `settings.json`，多账号 token 与额度快照位于同目录的 `accounts.json`，当前账号兼容写入 `~/.commandcode/auth.json`。程序会以当前用户权限保存这些文件，升级时会自动迁移旧版单账号 `auth.json`，建议不要将它们加入 Git 或复制到公开目录。
 
 ## API 接口
 
@@ -303,7 +354,7 @@ for chunk in response:
 ### cURL
 ```bash
 curl http://127.0.0.1:3050/v1/chat/completions \
-  -H "Authorization: Bearer user_xxxxxxxxx" \
+  -H "Authorization: Bearer <网关密钥>" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek/deepseek-v4-flash",
@@ -315,7 +366,7 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 ### Cursor
 在 Cursor 设置中添加 Custom Provider：
 - **API Base URL**: `http://127.0.0.1:3050/v1`
-- **API Key**: `user_xxxxxxxxx`
+- **API Key**: `<网关密钥>`
 - **Model**: 从模型列表中选择
 
 ### Anthropic (Python SDK)
@@ -323,7 +374,7 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 import anthropic
 
 client = anthropic.Anthropic(
-    api_key="user_xxxxxxxxx",
+    api_key="<网关密钥>",
     base_url="http://127.0.0.1:3050",
 )
 message = client.messages.create(
@@ -342,7 +393,7 @@ Anthropic SDK 通过 `x-api-key` 头鉴权——代理已原生支持（无需 `
 {
   "provider": "openai-compatible",
   "baseUrl": "http://127.0.0.1:3050/v1",
-  "apiKey": "user_xxxxxxxxx"
+  "apiKey": "<网关密钥>"
 }
 ```
 
@@ -425,7 +476,11 @@ CLI 发送图片的格式：
 
 ```bash
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
-docker run -d --name cc-proxy -p 3050:3050 -e PORT=3050 ghcr.io/maxeaglet/commandcode-proxy:latest
+docker run -d --name cc-proxy -p 3050:3050 \
+  -e PORT=3050 \
+  -v cc-proxy-runtime:/root/.config/commandcode-proxy \
+  -v cc-proxy-auth:/root/.commandcode \
+  ghcr.io/maxeaglet/commandcode-proxy:latest
 ```
 
 每次发版都会更新 `latest` 标签。镜像为公共可见，拉取无需登录。
@@ -433,10 +488,11 @@ docker run -d --name cc-proxy -p 3050:3050 -e PORT=3050 ghcr.io/maxeaglet/comman
 ### 快速启动 (docker compose)
 
 ```bash
+docker compose build
 docker compose up -d
 ```
 
-代理将在 `http://0.0.0.0:3050` 监听。通过 `PROXY_PORT` 自定义主机端口：
+代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥，再完成浏览器授权。通过 `PROXY_PORT` 自定义主机端口：
 
 ```bash
 PROXY_PORT=13050 docker compose up -d
@@ -445,6 +501,8 @@ PROXY_PORT=13050 docker compose up -d
 ### 从源码构建
 
 ```bash
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
 docker build -t commandcode-proxy:latest .
 docker run -d -p 3050:3050 -e PORT=3050 commandcode-proxy:latest
 ```
@@ -463,13 +521,17 @@ npm run docker:build:multi
 | `PROXY_PORT` | `3050` | 主机映射端口（仅 compose） |
 | `CC_MAX_BODY_MB` | `100` | 请求体大小上限（MB），超限请求返回 `HTTP 413` |
 
+容器部署建议挂载 `/root/.config/commandcode-proxy` 和 `/root/.commandcode`，否则容器删除后会丢失网关密钥、模型权限、多账号 token 和额度快照。
+
 ## 免责声明
 
 本项目仅供**学习和研究**使用。
 
-- **非官方**：本项目与 Command Code 无任何关联，非官方产品。
+本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
+
+- **非官方**：本项目与 Command Code 无任何关联，非官方产品；Web 控制台为本仓库新增的管理界面。
 - **个人使用**：使用者应自行承担所有责任。请遵守 [Command Code 服务条款](https://commandcode.ai/tos)。
-- **API Key**：本项目不会收集、上传或泄露你的 API Key。Key 通过每次请求的 `Authorization: Bearer <key>` 或 `x-api-key` 头传入，日志中不记录；`config.json` 中的可选 `apiKey` 字段仅作本地兜底，不会离开你的机器。
+- **API Key**：本项目不会收集、上传或泄露你的密钥。网关密钥只用于本地鉴权，上游账号 token 只由代理发送到配置的 Command Code API 地址；运行时文件应由部署者自行保护，日志不记录完整密钥。
 - **合规性**：协议基于对本地 CLI 网络流量的被动观察，未对服务端进行任何未授权访问、破解或篡改。
 - **账号风险**：建议和正常 CLI 使用频率保持一致，超高并发调用可能触发风控。
 
@@ -480,6 +542,6 @@ npm run docker:build:multi
 ## 开发
 
 ```bash
-# 带 watch 模式启动（文件修改自动重启）
+npm --prefix web run dev
 npm run dev
 ```

@@ -7,6 +7,11 @@ services:
       - "${PROXY_PORT:-3050}:3050"
     environment:
       PORT: "3050"
+      CC_API_KEY: "${CC_API_KEY:-}"
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY:-}"
+    volumes:
+      - commandcode_proxy_runtime:/root/.config/commandcode-proxy
+      - commandcode_auth:/root/.commandcode
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "http://127.0.0.1:3050/health"]
@@ -14,3 +19,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+volumes:
+  commandcode_proxy_runtime:
+  commandcode_auth:

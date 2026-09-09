@@ -2,22 +2,25 @@
 
 > [中文文档](README_zh.md)
 
-A reverse proxy that converts Command Code API to OpenAI / Anthropic compatible endpoints. Single file, zero external dependencies.
+A reverse proxy that converts Command Code API to OpenAI / Anthropic compatible endpoints. The proxy core remains a single file; the optional Web console is provided as a separate management layer.
 
 Built by analyzing official CLI network traffic to accurately replicate the Command Code API request protocol, including device-fingerprint and lifecycle pre-requests.
 
-**Features**: OpenAI Chat Completions + Anthropic Messages API | Streaming & non-streaming | Tool calling (tool_use) | Multimodal image input | Reasoning effort | Dynamic model list | Cache hit metrics | Device fingerprint disguise (per-key, auto-refresh) | `x-api-key` auth (Anthropic SDK) | Client disconnect detection with upstream abort | Zero-output → 429 auto-retry | Consecutive timeout → 429 auto-retry | Privacy-aware logging
+**Features**: OpenAI Chat Completions + Anthropic Messages API | Streaming & non-streaming | Tool calling (tool_use) | Multimodal image input | Reasoning effort | Dynamic upstream model catalog | Console model allowlist | Multiple gateway keys | Multi-account token storage and one-click switching | Per-account five-hour, weekly, and total remaining quotas | Cookie-protected Web console | Command Code browser authorization | Minute-level background usage refresh | Update and restart | Cache hit metrics | Device fingerprint disguise (per-key, auto-refresh) | `x-api-key` auth (Anthropic SDK) | Client disconnect detection with upstream abort | Zero-output → 429 auto-retry | Consecutive timeout → 429 auto-retry | Privacy-aware logging
 
 **Community**: [Linux.do](https://linux.do) — a friendly Chinese tech community.
 
 ## Quick Start
 
 ```bash
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
 npm start        # Start (the repo ships with config.json listening on http://0.0.0.0:3050)
-npm run dev      # Watch mode (auto-reload on file changes)
 ```
 
-API Key is passed via the `Authorization` request header (or `x-api-key` for Anthropic SDKs) — no need to store it in config files. Key must start with `user_` (automatically matched with any prefix, e.g. `Bearer token_user_xxx`):
+Open `http://127.0.0.1:3050/console`. On first access without a gateway key, the console asks you to set the first key. It becomes both the public console password and the first proxy access key. After signing in, select **Browser login** and complete the official Command Code authorization.
+
+When gateway keys are configured, API clients send a gateway key using the `Authorization: Bearer` header (or `x-api-key` for Anthropic SDKs). Without gateway keys, the original `user_` upstream-key compatibility remains available:
 
 ```bash
 curl http://127.0.0.1:3050/v1/chat/completions \
@@ -25,6 +28,31 @@ curl http://127.0.0.1:3050/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}'
 ```
+
+## Quick Deployment
+
+### From Source
+
+Node.js 18 or newer is required. Install frontend dependencies and build once, then start the proxy:
+
+```bash
+git clone https://git.1dea.top/aidea/cmd2api.git
+cd cmd2api
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
+npm start
+```
+
+Open `http://127.0.0.1:3050/console`, set the gateway key, and select **Add account** to complete the official Command Code browser authorization. Account tokens, gateway keys, and quota snapshots are stored in the runtime directories; keep those directories when upgrading or recreating a container.
+
+### Docker Compose
+
+```bash
+docker compose up -d --build
+docker compose logs -f proxy
+```
+
+The default host port is `3050`. Override it with `PROXY_PORT=13050 docker compose up -d --build`. Compose mounts both runtime and account directories, so saved accounts survive container restarts.
 
 ## File Structure
 
@@ -34,6 +62,7 @@ commandcode/
 ├── LICENSE               # MIT License
 ├── package.json          # npm start / npm run dev
 ├── proxy.mjs             # Single-file proxy core (~1900 lines)
+├── web/                  # Web console, admin API, and frontend build project
 ├── Dockerfile            # Container build (node:22-alpine)
 ├── docker-compose.yml    # Container orchestration
 ├── .dockerignore         # Build context exclusions
@@ -56,6 +85,9 @@ commandcode/
 | `apiBase` | `https://api.commandcode.ai` | CC API base URL |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | Optional fallback API key (requests can also send it via header) |
+| `gatewayApiKey` | `""` | Legacy single gateway key; manage multiple keys in the Web console |
+| `gatewayApiKeys` | `[]` | Optional gateway-key array; the first key is also the console password |
+| `allowedModelIds` | `null` | Optional model allowlist; `null` allows all models and console settings are stored in the runtime directory |
 | `logFile` | `""` | Log file path (empty = console only) |
 | `logLevel` | `info` | Log level |
 | `useProviderModels` | `true` | Dynamically fetch model list from Provider API |
@@ -70,6 +102,9 @@ commandcode/
 | `HOST` | `host` |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
+| `GATEWAY_API_KEY` | `gatewayApiKey` |
+| `GATEWAY_API_KEYS_JSON` | `gatewayApiKeys` (advanced) |
+| `CC_API_KEY` | Command Code upstream API key |
 | `LOG_FILE` | `logFile` |
 | `CC_USE_PROVIDER_MODELS` | `useProviderModels` |
 | `CMD_ZDR` | `zdr` (`1` to enable) |
@@ -81,6 +116,22 @@ This requests Command Code's ZDR-only routing; the upstream service remains the
 authority for actual retention and provider availability.
 
 **Request body limit**: independent of `config.json` — requests larger than **100 MB** are rejected with `HTTP 413` (the connection is kept alive and drained, not reset). Override with `CC_MAX_BODY_MB` (positive integer, unit: MB).
+
+With gateway keys configured, clients authenticate to this proxy with any gateway key while the proxy uses `CC_API_KEY` for Command Code. Without gateway keys, clients may still provide a `user_...` upstream key directly.
+
+### Web Console
+
+The console is available at `/console`; its management API is under `/admin/api`. The public endpoints are limited to first-time setup, login, and service status. After setup, keys, usage, model permissions, restart, and update operations require the console session cookie.
+
+- The first gateway key is the public console password. Deleting it promotes the next key; deleting the last key returns to first-time setup.
+- Add or delete gateway keys without restarting the process. The first key can also be replaced, which invalidates console sessions.
+- Use **Browser login** to store multiple Command Code account tokens locally. The account list supports one-click switching, deletion, and refreshing all accounts; each row shows only the remaining five-hour, weekly, and total quotas. Switching updates the proxy's active upstream token immediately without a restart.
+- The model manager reads the full catalog from the upstream Provider API. All models are allowed by default; saved restrictions hide models from `/v1/models` and return `HTTP 403` for direct calls.
+- Usage refreshes in the background every 60 seconds while the console is open.
+- Update and restart runs only when the Git worktree is clean, using `git pull --ff-only`, frontend dependency installation, and a production build. Local changes are refused rather than overwritten.
+- Command Code accepts only loopback browser callbacks. The console therefore opens the authorization page from any host but redirects the browser to `http://127.0.0.1:3050/callback`; use the console from the same machine that runs the proxy.
+
+Runtime credentials are stored in `~/.config/commandcode-proxy/credentials.env`, model settings in `~/.config/commandcode-proxy/settings.json`, and multiple account tokens plus cached quotas in `~/.config/commandcode-proxy/accounts.json`. The active account is also mirrored to `~/.commandcode/auth.json` for compatibility. Files are created with restrictive permissions; an older single-account `auth.json` is migrated automatically and must not be committed or copied to a public directory.
 
 ## API Endpoints
 
@@ -427,7 +478,11 @@ Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to the
 
 ```bash
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
-docker run -d --name cc-proxy -p 3050:3050 -e PORT=3050 ghcr.io/maxeaglet/commandcode-proxy:latest
+docker run -d --name cc-proxy -p 3050:3050 \
+  -e PORT=3050 \
+  -v cc-proxy-runtime:/root/.config/commandcode-proxy \
+  -v cc-proxy-auth:/root/.commandcode \
+  ghcr.io/maxeaglet/commandcode-proxy:latest
 ```
 
 The `latest` tag is updated on each release. The image is public — no login required to pull.
@@ -435,10 +490,11 @@ The `latest` tag is updated on each release. The image is public — no login re
 ### Quick Start (docker compose)
 
 ```bash
+docker compose build
 docker compose up -d
 ```
 
-The proxy will listen on `http://0.0.0.0:3050`. Set `PROXY_PORT` to customize the host port:
+The proxy will listen on `http://0.0.0.0:3050` and provide `/console`. Set `PROXY_PORT` to customize the host port:
 
 ```bash
 PROXY_PORT=13050 docker compose up -d
@@ -447,6 +503,8 @@ PROXY_PORT=13050 docker compose up -d
 ### Build from Source
 
 ```bash
+npm --prefix web ci --ignore-scripts
+npm --prefix web run build
 docker build -t commandcode-proxy:latest .
 docker run -d -p 3050:3050 -e PORT=3050 commandcode-proxy:latest
 ```
@@ -465,13 +523,17 @@ npm run docker:build:multi
 | `PROXY_PORT` | `3050` | Host port (compose only) |
 | `CC_MAX_BODY_MB` | `100` | Max request body size in MB; oversized requests are rejected with `HTTP 413` |
 
+For container deployments, mount `/root/.config/commandcode-proxy` and `/root/.commandcode` so gateway keys, model settings, multiple account tokens, and cached quotas survive container recreation.
+
 ## Disclaimer
 
 This project is for **educational and research purposes** only.
 
-- **Unofficial**: This project is not affiliated with Command Code in any way.
+This repository is a continuation of the upstream [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) project under its MIT License. Keep the repository's `LICENSE` file and its `Copyright (c) 2026 MAXeaglet` notice when redistributing; the Web console, multi-account token storage and switching, quota display, runtime management, and deployment adaptations added here are released under the same license. Command Code and its services belong to their respective rights holders; this is not official Command Code software.
+
+- **Unofficial**: This project is not affiliated with Command Code in any way; the Web console is an original management interface added by this repository.
 - **Personal Use**: Users assume all responsibility. Please comply with the [Command Code Terms of Service](https://commandcode.ai/tos).
-- **API Key**: This project does not collect, upload, or leak your API Key. The key is sent per request via the `Authorization: Bearer <key>` or `x-api-key` header and is never logged; an optional `apiKey` field in `config.json` serves only as a local fallback and never leaves your machine.
+- **API Key**: This project does not collect, upload, or leak your credentials. Gateway keys are used only for local proxy authentication; the upstream account token is sent only to the configured Command Code API address. Protect runtime files yourself; full keys are not written to logs.
 - **Compliance**: The protocol is based on passive observation of local CLI network traffic. No unauthorized access, cracking, or tampering of the server has been performed.
 - **Account Risk**: Keep usage frequency consistent with normal CLI usage. Extremely high concurrent calls may trigger risk controls.
 
@@ -480,6 +542,6 @@ This project is for **educational and research purposes** only.
 ## Development
 
 ```bash
-# Start with watch mode (auto-reload on file changes)
+npm --prefix web run dev
 npm run dev
 ```

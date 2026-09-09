@@ -4,13 +4,46 @@
  */
 import http from 'http';
 import crypto from 'crypto';
+import { execFile, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { readFileSync, existsSync, appendFileSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { homedir } from 'os';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { promisify } from 'util';
+import {
+  createAdminController,
+  gatewayKeysFromCredentials,
+  readRuntimeCredentials,
+  readRuntimeSettings,
+} from './web/admin.mjs';
 
 // ── 配置加载 ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
+
+function normalizeGatewayApiKeys(source, legacy = '') {
+  const list = Array.isArray(source) ? [...source] : source ? [source] : [];
+  if (list.length === 0 && legacy) list.push(legacy);
+  const result = [];
+  for (const item of list) {
+    const value = typeof item === 'object' && item !== null
+      ? String(item.value ?? item.key ?? item.apiKey ?? '').trim()
+      : String(item ?? '').trim();
+    if (value && !result.includes(value)) result.push(value);
+  }
+  return result.slice(0, 32);
+}
+
+function parseGatewayApiKeysJson(raw, encoding = 'utf8') {
+  try {
+    const json = encoding === 'base64url' ? Buffer.from(raw, 'base64url').toString('utf8') : raw;
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function loadConfig() {
   const defaults = {
@@ -18,6 +51,9 @@ function loadConfig() {
     host: '0.0.0.0',
     apiBase: 'https://api.commandcode.ai',
     projectSlug: 'cc-proxy',
+    gatewayApiKey: '',
+    gatewayApiKeys: [],
+    ccApiKey: '',
     logFile: '',
     logLevel: 'info',
     useProviderModels: true,
@@ -35,14 +71,44 @@ function loadConfig() {
     }
   }
 
+  const runtimeCredentials = readRuntimeCredentials(join(homedir(), '.config', 'commandcode-proxy'));
+  if (Object.prototype.hasOwnProperty.call(runtimeCredentials, 'CC_API_KEY')) {
+    defaults.ccApiKey = runtimeCredentials.CC_API_KEY;
+  }
+  if (Object.prototype.hasOwnProperty.call(runtimeCredentials, 'GATEWAY_API_KEYS_JSON_B64')
+    || Object.prototype.hasOwnProperty.call(runtimeCredentials, 'GATEWAY_API_KEYS_JSON')
+    || Object.prototype.hasOwnProperty.call(runtimeCredentials, 'GATEWAY_API_KEY')) {
+    const runtimeGatewayKeys = gatewayKeysFromCredentials(runtimeCredentials);
+    defaults.gatewayApiKeys = runtimeGatewayKeys.map((item) => item.value);
+    defaults.gatewayApiKey = defaults.gatewayApiKeys[0] || '';
+  }
+
   // 环境变量覆写
   if (process.env.PORT) defaults.port = parseInt(process.env.PORT);
   if (process.env.HOST) defaults.host = process.env.HOST;
   if (process.env.CC_API_BASE) defaults.apiBase = process.env.CC_API_BASE;
   if (process.env.PROJECT_SLUG) defaults.projectSlug = process.env.PROJECT_SLUG;
+  if (process.env.GATEWAY_API_KEY !== undefined) defaults.gatewayApiKey = process.env.GATEWAY_API_KEY;
+  let environmentGatewayKeys = null;
+  if (process.env.GATEWAY_API_KEYS_JSON_B64 !== undefined) {
+    environmentGatewayKeys = parseGatewayApiKeysJson(process.env.GATEWAY_API_KEYS_JSON_B64, 'base64url');
+  } else if (process.env.GATEWAY_API_KEYS_JSON !== undefined) {
+    environmentGatewayKeys = parseGatewayApiKeysJson(process.env.GATEWAY_API_KEYS_JSON);
+  }
+  if (process.env.CC_API_KEY !== undefined) defaults.ccApiKey = process.env.CC_API_KEY;
   if (process.env.LOG_FILE) defaults.logFile = process.env.LOG_FILE;
   if (process.env.CC_USE_PROVIDER_MODELS) defaults.useProviderModels = process.env.CC_USE_PROVIDER_MODELS !== 'false';
   if (process.env.CMD_ZDR !== undefined) defaults.zdr = process.env.CMD_ZDR === '1';
+
+  const gatewayApiKeys = normalizeGatewayApiKeys(
+    environmentGatewayKeys || defaults.gatewayApiKeys,
+    defaults.gatewayApiKey,
+  );
+  defaults.gatewayApiKeys = gatewayApiKeys;
+  defaults.gatewayApiKey = gatewayApiKeys[0] || '';
+
+  const runtimeSettings = readRuntimeSettings();
+  if (runtimeSettings.hasAllowlist) defaults.allowedModelIds = runtimeSettings.allowedModelIds;
 
   return defaults;
 }
@@ -809,20 +875,53 @@ function sendJSON(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function getApiKey(headers) {
-  // Try Authorization: Bearer header (OpenAI SDK style)
+function getPresentedApiKey(headers) {
   const auth = headers['authorization'] || headers['Authorization'] || '';
   if (auth.startsWith('Bearer ')) {
-    const match = auth.slice(7).match(/user_[a-zA-Z0-9_-]+/);
-    if (match) return match[0];
+    return auth.slice(7).trim();
   }
-  // Fall back to x-api-key header (Anthropic SDK style)
+
   const xKey = headers['x-api-key'] || headers['X-Api-Key'] || '';
-  if (xKey) {
-    const match = xKey.match(/user_[a-zA-Z0-9_-]+/);
-    if (match) return match[0];
+  if (xKey) return String(xKey).trim();
+  return '';
+}
+
+function getApiKey(headers) {
+  const presentedKey = getPresentedApiKey(headers);
+  const configuredCcKey = CFG.ccApiKey || CFG.apiKey || '';
+  const gatewayApiKeys = Array.isArray(CFG.gatewayApiKeys)
+    ? CFG.gatewayApiKeys
+    : normalizeGatewayApiKeys([], CFG.gatewayApiKey);
+
+  // 配置网关密钥后，客户端只需知道网关密钥，上游密钥不会暴露给客户端。
+  if (gatewayApiKeys.length > 0) {
+    const matched = gatewayApiKeys.some((gatewayApiKey) => {
+      const presented = Buffer.from(presentedKey);
+      const expected = Buffer.from(gatewayApiKey);
+      return presented.length === expected.length && crypto.timingSafeEqual(presented, expected);
+    });
+    if (!matched || !configuredCcKey) return null;
+    return configuredCcKey;
   }
+
+  // 未配置网关密钥时，保留原有的 user_... 请求头兼容方式。
+  const match = presentedKey.match(/user_[a-zA-Z0-9_-]+/);
+  if (match) return match[0];
+  if (configuredCcKey) return configuredCcKey;
   return null;
+}
+
+function isModelAllowed(model) {
+  return !Array.isArray(CFG.allowedModelIds) || CFG.allowedModelIds.includes(model);
+}
+
+function sendModelForbidden(res, model) {
+  sendJSON(res, 403, {
+    error: {
+      message: `Model "${model}" is not enabled by the console administrator`,
+      type: 'model_not_allowed',
+    },
+  });
 }
 
 // ── 流式转发 ────────────────────────────────────────
@@ -881,6 +980,10 @@ async function handleChatCompletions(req, res) {
 
   const stream = openaiReq.stream === true;
   const model = openaiReq.model || 'deepseek/deepseek-v4-flash';
+  if (!isModelAllowed(model)) {
+    sendModelForbidden(res, model);
+    return;
+  }
   const completionId = `chatcmpl-${randomUUID().slice(0, 12)}`;
   const created = nowUnix();
 
@@ -1652,6 +1755,10 @@ async function handleMessages(req, res) {
 
   const stream = anthropicReq.stream === true;
   const model = anthropicReq.model || 'claude-sonnet-4-6';
+  if (!isModelAllowed(model)) {
+    sendAnthropicError(res, 403, 'permission_error', `Model "${model}" is not enabled by the console administrator`);
+    return;
+  }
 
   // Convert Anthropic → OpenAI → CC
   const openaiReq = convertAnthropicToOpenAI(anthropicReq);
@@ -1984,11 +2091,18 @@ async function fetchModels(apiKey) {
 
 async function handleModels(req, res) {
   const apiKey = getApiKey(req.headers);
+  const gatewayConfigured = Array.isArray(CFG.gatewayApiKeys)
+    ? CFG.gatewayApiKeys.length > 0
+    : Boolean(CFG.gatewayApiKey);
+  if (gatewayConfigured && !apiKey) {
+    sendJSON(res, 401, { error: { message: 'Missing or invalid gateway API key', type: 'auth_error' } });
+    return;
+  }
   const models = await fetchModels(apiKey);
   const now = nowUnix();
   sendJSON(res, 200, {
     object: 'list',
-    data: models.map(m => ({
+    data: models.filter((model) => isModelAllowed(model.id)).map(m => ({
       id: m.id,
       object: 'model',
       created: now,
@@ -2007,7 +2121,7 @@ function handleHealth(req, res) {
 const server = http.createServer(async (req, res) => {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -2019,6 +2133,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${host}`);
 
   try {
+    if (await adminController.handle(req, res, url)) return;
     if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
       await handleChatCompletions(req, res);
     } else if (url.pathname === '/v1/messages' && req.method === 'POST') {
@@ -2033,6 +2148,103 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     sendJSON(res, 500, { error: { message: e.message, type: 'internal_error' } });
   }
+});
+
+async function closeServer() {
+  await new Promise((resolveClose, rejectClose) => {
+    try {
+      server.close((error) => {
+        if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') {
+          rejectClose(error);
+          return;
+        }
+        resolveClose();
+      });
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+    } catch (error) {
+      rejectClose(error);
+    }
+  });
+}
+
+async function restartServer() {
+  await closeServer();
+  await new Promise((resolveListen, rejectListen) => {
+    const onError = (error) => {
+      server.off('listening', onListening);
+      rejectListen(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      log('info', 'CC Proxy restarted', { url: `http://${CFG.host}:${CFG.port}` });
+      resolveListen();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(CFG.port, CFG.host);
+  });
+}
+
+async function runMaintenanceCommand(command, args) {
+  try {
+    return await execFileAsync(command, args, {
+      cwd: __dirname,
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 120_000,
+    });
+  } catch (error) {
+    const detail = String(error.stderr || error.stdout || error.message || '未知错误')
+      .trim()
+      .split(/\r?\n/)
+      .slice(-4)
+      .join(' ')
+      .slice(0, 600);
+    const wrapped = new Error(`执行 ${command} 失败：${detail}`);
+    wrapped.status = 502;
+    throw wrapped;
+  }
+}
+
+async function updateProject() {
+  const status = await runMaintenanceCommand('git', ['status', '--porcelain', '--untracked-files=all']);
+  if (status.stdout.trim()) {
+    const error = new Error('项目存在未提交改动，已停止更新以保护本地修改；请先提交或整理工作树。');
+    error.status = 409;
+    throw error;
+  }
+  await runMaintenanceCommand('git', ['pull', '--ff-only']);
+  await runMaintenanceCommand('npm', ['--prefix', 'web', 'install', '--ignore-scripts', '--no-audit', '--no-fund']);
+  await runMaintenanceCommand('npm', ['--prefix', 'web', 'run', 'build']);
+  return { message: '项目已更新，正在重启代理服务' };
+}
+
+async function relaunchProcess() {
+  await closeServer();
+  const startScript = process.env.COMMANDCODE_PROXY_START_SCRIPT
+    || join(homedir(), '.config', 'commandcode-proxy', 'start.sh');
+  const gatewayKeys = Array.isArray(CFG.gatewayApiKeys) ? CFG.gatewayApiKeys : [];
+  const childEnv = {
+    ...process.env,
+    CC_API_KEY: CFG.ccApiKey || '',
+    GATEWAY_API_KEY: gatewayKeys[0] || '',
+    GATEWAY_API_KEYS_JSON_B64: Buffer.from(JSON.stringify(gatewayKeys), 'utf8').toString('base64url'),
+  };
+  const child = existsSync(startScript)
+    ? spawn('/bin/sh', [startScript], { cwd: __dirname, env: childEnv, detached: true, stdio: 'ignore' })
+    : spawn(process.execPath, [resolve(__dirname, 'proxy.mjs')], { cwd: __dirname, env: childEnv, detached: true, stdio: 'ignore' });
+  child.unref();
+  log('info', 'CC Proxy replacement process started', { pid: child.pid });
+  setTimeout(() => process.exit(0), 80);
+}
+
+const adminController = createAdminController({
+  config: CFG,
+  projectDir: __dirname,
+  server,
+  restart: restartServer,
+  update: updateProject,
+  relaunch: relaunchProcess,
 });
 
 // 全局兜底：abort 触发的异步 rejection 不会让进程崩溃
@@ -2054,7 +2266,12 @@ server.listen(CFG.port, CFG.host, () => {
     zdr: CFG.zdr ? 'enabled (x-cmd-zdr: 1 on generation/init requests)' : 'off (CMD_ZDR=1 or per-request x-cmd-zdr: 1 to enable)',
     logFile: CFG.logFile || '(console only)',
   });
-  if (!CFG.apiKey) {
-    log('info', 'No API key in config. API key must be sent in Authorization: Bearer <key> header per request.');
+  const gatewayConfigured = Array.isArray(CFG.gatewayApiKeys)
+    ? CFG.gatewayApiKeys.length > 0
+    : Boolean(CFG.gatewayApiKey);
+  if (gatewayConfigured && !CFG.ccApiKey && !CFG.apiKey) {
+    log('error', 'Gateway API key is configured but CC_API_KEY is missing.');
+  } else if (!gatewayConfigured && !CFG.ccApiKey && !CFG.apiKey) {
+    log('info', 'No gateway or CC API key configured. Requests must provide a user_... key in the Authorization or x-api-key header.');
   }
 });
