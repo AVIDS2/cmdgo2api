@@ -569,10 +569,12 @@ function bridgeCommands(origin, state, ticket) {
     '--state', state,
     '--ticket', ticket,
   ];
+  const shellArgs = args.map(shellQuote).join(' ');
+  const powershellArgs = args.map(powershellQuote).join(' ');
   return {
     helperUrl,
-    command: `curl -fsSL ${shellQuote(helperUrl)} | node - ${args.map(shellQuote).join(' ')}`,
-    powershellCommand: `(Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(helperUrl)}).Content | node - ${args.map(powershellQuote).join(' ')}`,
+    command: `helper_path="$(mktemp -t cmdc-remote-login.XXXXXX)" && trap 'rm -f "$helper_path"' EXIT && curl -fsSL ${shellQuote(helperUrl)} -o "$helper_path" && node "$helper_path" ${shellArgs}`,
+    powershellCommand: `$helperPath = Join-Path ([System.IO.Path]::GetTempPath()) ('cmdc-remote-login-' + [guid]::NewGuid().ToString('N') + '.mjs'); try { Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(helperUrl)} -OutFile $helperPath; & node $helperPath ${powershellArgs} } finally { Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue }`,
   };
 }
 

@@ -56,11 +56,20 @@ if (!options.server || !options.state || !options.ticket) {
     let callbackServer;
     let callbackHandled = false;
 
+    const callbackHeaders = {
+      'Access-Control-Allow-Origin': AUTH_ORIGIN,
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Private-Network': 'true',
+      'Cache-Control': 'no-store',
+      Vary: 'Origin',
+    };
+
     function sendPage(response, status, title, message) {
       const body = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a;display:grid;place-items:center;min-height:100vh;margin:0}main{text-align:center;padding:40px}h1{font-size:24px}p{color:#64748b;line-height:1.6}</style><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></main>`;
       response.writeHead(status, {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
+        ...callbackHeaders,
       });
       response.end(body);
     }
@@ -163,6 +172,11 @@ if (!options.server || !options.state || !options.ticket) {
         url = new URL(request.url || '/', 'http://127.0.0.1');
       } catch {
         sendPage(response, 400, '回调地址无效', '请重新发起远程添加账号。');
+        return;
+      }
+      if (url.pathname === '/callback' && request.method === 'OPTIONS') {
+        response.writeHead(204, callbackHeaders);
+        response.end();
         return;
       }
       if (url.pathname !== '/callback' || !['GET', 'POST'].includes(request.method)) {

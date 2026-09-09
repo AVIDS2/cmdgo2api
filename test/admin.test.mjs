@@ -199,6 +199,9 @@ test('本地使用浏览器授权，远程通过本地授权助手自动桥接',
   });
   assert.equal(remoteStart.payload.mode, 'bridge');
   assert.equal(remoteStart.payload.loginUrl, undefined);
+  assert.match(remoteStart.payload.command, /mktemp -t cmdc-remote-login/);
+  assert.match(remoteStart.payload.command, /curl -fsSL/);
+  assert.match(remoteStart.payload.powershellCommand, /Invoke-WebRequest/);
   const ticketMatch = remoteStart.payload.command.match(/['"]--ticket['"] ['"]([^'"]+)['"]/);
   assert.ok(ticketMatch);
   const ticket = ticketMatch[1];
