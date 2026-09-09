@@ -555,6 +555,12 @@
 .auth-banner-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
 .auth-banner-copy strong { color: #115e59; font-size: 12px; }
 .auth-banner-copy span { overflow: hidden; color: #3f847b; text-overflow: ellipsis; white-space: nowrap; }
+.auth-banner-manual { align-items: flex-start; flex-wrap: wrap; }
+.auth-token-form { display: grid; flex: 1 1 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 9px; margin-left: 39px; }
+.auth-token-form label { grid-column: 1 / -1; color: #115e59; font-size: 10px; font-weight: 700; }
+.auth-token-form .secret-input-wrap { min-width: 0; }
+.auth-token-form > button { align-self: end; }
+.auth-banner-note { flex-basis: 100%; margin: 0 0 0 39px; color: #9a3412; font-size: 10px; line-height: 1.5; }
 
 .section-heading {
   display: flex;
@@ -723,6 +729,9 @@
   .auth-banner { align-items: flex-start; flex-wrap: wrap; }
   .auth-banner-copy { flex-basis: calc(100% - 50px); }
   .auth-banner > button:nth-last-child(2) { margin-left: 39px; }
+  .auth-token-form { grid-template-columns: 1fr; margin-right: 39px; }
+  .auth-token-form > button { width: 100%; }
+  .auth-banner-note { margin-right: 39px; }
   .settings-grid { grid-template-columns: 1fr; }
   .key-form-row { align-items: stretch; flex-direction: column; }
   .key-form-row > button { width: 100%; }

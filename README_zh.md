@@ -18,7 +18,7 @@ npm --prefix web run build
 npm start        # 启动，监听 http://0.0.0.0:3050
 ```
 
-打开 `http://127.0.0.1:3050/console`。首次没有网关密钥时，控制台会要求设置第一个密钥；设置完成后它既是公网控制台登录密码，也是第一个代理访问密钥。登录控制台后点击“浏览器登录”，按照 Command Code 官方页面完成授权。
+打开 `http://127.0.0.1:3050/console`。首次没有网关密钥时，控制台会要求设置第一个密钥；设置完成后它既是公网控制台登录密码，也是第一个代理访问密钥。通过本机地址访问时，点击“添加账号”会使用 Command Code 官方浏览器授权；通过公网域名访问时，会切换为手动粘贴已验证的 API Key 流程。
 
 配置了网关密钥后，API 请求通过 `Authorization: Bearer <网关密钥>` 传入（Anthropic SDK 可用 `x-api-key`）。没有配置网关密钥时，仍兼容直接传入 `user_` 开头的上游 API Key：
 
@@ -43,7 +43,7 @@ npm --prefix web run build
 npm start
 ```
 
-启动后访问 `http://127.0.0.1:3050/console`，设置网关密钥，再点击“添加账号”完成 Command Code 官方浏览器授权。账号 token、网关密钥和额度快照会保存在运行环境中，升级或重建容器时应保留对应数据目录。
+启动后访问 `http://127.0.0.1:3050/console`，设置网关密钥，再点击“添加账号”。本地访问可直接完成官方浏览器授权；远程访问请使用 HTTPS，并粘贴在可信本地设备执行 `cmd login` 后得到的 `~/.commandcode/auth.json` 中的 `apiKey`。账号 token、网关密钥和额度快照会保存在运行环境中，升级或重建容器时应保留对应数据目录。
 
 ### Docker Compose
 
@@ -82,7 +82,7 @@ commandcode/
 |------|--------|------|
 | `port` | `3000` | 监听端口（仓库自带 config.json 为 3050） |
 | `host` | `0.0.0.0` | 监听地址 |
-| `publicUrl` | `""` | 浏览器授权回调使用的公网根地址；为空时按请求地址自动推导 |
+| `publicUrl` | `""` | 旧版公网回调配置；仅保留兼容，不能绕过上游只允许本机回调的限制 |
 | `apiBase` | `https://api.commandcode.ai` | CC API 地址 |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | 可选兜底 API Key（请求也可通过 header 传入） |
@@ -101,7 +101,7 @@ commandcode/
 |------|-----------------|
 | `PORT` | `port` |
 | `HOST` | `host` |
-| `CC_PUBLIC_URL` | `publicUrl`；固定公网域名时推荐设置 |
+| `CC_PUBLIC_URL` | `publicUrl`；旧版兼容配置，不用于远程账号授权 |
 | `CONSOLE_PUBLIC_URL` | `publicUrl`；`CC_PUBLIC_URL` 的兼容别名 |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
@@ -130,7 +130,7 @@ header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数�
 - 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
 - 用量在控制台存活期间每 60 秒后台异步刷新一次。
 - “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
-- 浏览器授权完成后会回调到代理服务本身，不再固定跳转到访问者本机。未设置 `CC_PUBLIC_URL` 时，程序会根据当前请求的 `X-Forwarded-Proto`、`X-Forwarded-Host` 和 `Host` 自动推导；使用反向代理或固定域名时，建议显式设置 `CC_PUBLIC_URL=https://console.example.com`，并确保 `/callback` 能转发到本代理。设置公网地址后，从 `127.0.0.1`、`localhost` 或 `::1` 打开的本地控制台仍会优先使用本地回调，远程控制台使用公网回调。公网部署建议使用 HTTPS。
+- 本地控制台（`127.0.0.1`、`localhost` 或 `::1`）使用官方浏览器授权和本地回调；远程控制台不会生成公网回调，因为 Command Code 官方明确只接受本机回调。远程添加账号会改用手动 API Key 流程：先在可信本地设备执行 `cmd login`，再将 `~/.commandcode/auth.json` 中的 `apiKey` 粘贴到 HTTPS 控制台。也可以通过 SSH 端口转发访问本机控制台，以保留完整浏览器授权流程。
 
 运行时敏感文件位于 `~/.config/commandcode-proxy/credentials.env`，模型设置位于同目录的 `settings.json`，多账号 token 与额度快照位于同目录的 `accounts.json`，当前账号兼容写入 `~/.commandcode/auth.json`。程序会以当前用户权限保存这些文件，升级时会自动迁移旧版单账号 `auth.json`，建议不要将它们加入 Git 或复制到公开目录。
 
@@ -481,7 +481,6 @@ CLI 发送图片的格式：
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
 docker run -d --name cc-proxy -p 3050:3050 \
   -e PORT=3050 \
-  -e CC_PUBLIC_URL=https://console.example.com \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
   ghcr.io/maxeaglet/commandcode-proxy:latest
@@ -496,10 +495,10 @@ docker compose build
 docker compose up -d
 ```
 
-代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥，再完成浏览器授权。直接通过服务器公网地址访问时会自动生成远程回调；反向代理或固定域名部署时，建议设置 `CC_PUBLIC_URL`：
+代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥。通过公网域名访问时，点击“添加账号”使用 HTTPS 手动粘贴 API Key；通过本机地址访问时使用官方浏览器授权。
 
 ```bash
-CC_PUBLIC_URL=https://console.example.com docker compose up -d --build
+docker compose up -d --build
 ```
 
 通过 `PROXY_PORT` 自定义主机端口：
@@ -529,7 +528,7 @@ npm run docker:build:multi
 |------|--------|------|
 | `PORT` | `3050` | 容器内监听端口 |
 | `PROXY_PORT` | `3050` | 主机映射端口（仅 compose） |
-| `CC_PUBLIC_URL` | 空 | 浏览器授权回调使用的公网根地址，例如 `https://console.example.com` |
+| `CC_PUBLIC_URL` | 空 | 旧版公网回调配置，仅保留兼容；不能绕过 Command Code 只允许本机回调的限制 |
 | `CC_MAX_BODY_MB` | `100` | 请求体大小上限（MB），超限请求返回 `HTTP 413` |
 
 容器部署建议挂载 `/root/.config/commandcode-proxy` 和 `/root/.commandcode`，否则容器删除后会丢失网关密钥、模型权限、多账号 token 和额度快照。
@@ -538,7 +537,7 @@ npm run docker:build:multi
 
 本项目仅供**学习和研究**使用。
 
-本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
+本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理、远程手动添加账号和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
 
 - **非官方**：本项目与 Command Code 无任何关联，非官方产品；Web 控制台为本仓库新增的管理界面。
 - **个人使用**：使用者应自行承担所有责任。请遵守 [Command Code 服务条款](https://commandcode.ai/tos)。

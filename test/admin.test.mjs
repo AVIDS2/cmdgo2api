@@ -106,11 +106,10 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   const cookie = sessionCookie(login.response);
 
   const firstStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie, {
-    host: 'proxy.example.com',
-    'x-forwarded-host': 'console.example.com',
-    'x-forwarded-proto': 'https',
+    host: '127.0.0.1:3050',
   });
-  assert.equal(new URL(firstStart.payload.loginUrl).searchParams.get('callback'), 'https://console.example.com/callback');
+  assert.equal(firstStart.payload.mode, 'browser');
+  assert.equal(new URL(firstStart.payload.loginUrl).searchParams.get('callback'), 'http://127.0.0.1:3050/callback');
   const firstState = new URL(firstStart.payload.loginUrl).searchParams.get('state');
   await call(controller, 'GET', `/callback?state=${encodeURIComponent(firstState)}&apiKey=user_first&userId=first-user&userName=第一个账号&email=first@example.com`);
   const firstConfig = await call(controller, 'GET', '/admin/api/config', null, cookie);
@@ -164,20 +163,21 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   assert.equal(existsSync(authFile), false);
 });
 
-test('浏览器登录同时支持本地和远程回调地址', async () => {
+test('本地使用浏览器授权，远程入口切换为手动添加账号', async () => {
   const directory = makeTemporaryDirectory();
   const runtimeDir = join(directory, 'runtime');
+  const config = {
+    apiBase: 'https://api.commandcode.ai',
+    gatewayApiKey: 'gateway-pass',
+    gatewayApiKeys: ['gateway-pass'],
+    ccApiKey: '',
+    host: '0.0.0.0',
+    port: 3050,
+    publicUrl: 'https://fixed.example.com/',
+    allowedModelIds: null,
+  };
   const controller = createAdminController({
-    config: {
-      apiBase: 'https://api.commandcode.ai',
-      gatewayApiKey: 'gateway-pass',
-      gatewayApiKeys: ['gateway-pass'],
-      ccApiKey: '',
-      host: '0.0.0.0',
-      port: 3050,
-      publicUrl: 'https://fixed.example.com/',
-      allowedModelIds: null,
-    },
+    config,
     projectDir: directory,
     runtimeDir,
     authFile: join(directory, 'auth', 'auth.json'),
@@ -188,11 +188,48 @@ test('浏览器登录同时支持本地和远程回调地址', async () => {
   const login = await call(controller, 'POST', '/admin/api/auth/login', { password: 'gateway-pass' });
   const cookie = sessionCookie(login.response);
   const localStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie);
+  assert.equal(localStart.payload.mode, 'browser');
   assert.equal(new URL(localStart.payload.loginUrl).searchParams.get('callback'), 'http://127.0.0.1:3050/callback');
   const remoteStart = await call(controller, 'POST', '/admin/api/auth/start', {}, cookie, {
     host: 'proxy.internal:3050',
     'x-forwarded-host': 'fixed.example.com',
     'x-forwarded-proto': 'https',
   });
-  assert.equal(new URL(remoteStart.payload.loginUrl).searchParams.get('callback'), 'https://fixed.example.com/callback');
+  assert.equal(remoteStart.payload.mode, 'manual');
+  assert.equal(remoteStart.payload.loginUrl, undefined);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/alpha\/whoami\?limits=1$/);
+    return new Response(JSON.stringify({ user: { id: 'remote-user', userName: '远程账号', email: 'remote@example.com' } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    const added = await call(controller, 'POST', '/admin/api/auth/token', {
+      state: remoteStart.payload.state,
+      apiKey: 'user_remote',
+    }, cookie, {
+      host: 'proxy.internal:3050',
+      'x-forwarded-host': 'fixed.example.com',
+      'x-forwarded-proto': 'https',
+    });
+    assert.equal(added.response.statusCode, 200);
+    assert.equal(added.payload.account.userName, '远程账号');
+    assert.equal(added.payload.accounts.length, 1);
+    assert.equal(JSON.stringify(added.payload).includes('user_remote'), false);
+    assert.equal(config.ccApiKey, 'user_remote');
+    const replay = await call(controller, 'POST', '/admin/api/auth/token', {
+      state: remoteStart.payload.state,
+      apiKey: 'user_remote',
+    }, cookie, {
+      host: 'proxy.internal:3050',
+      'x-forwarded-host': 'fixed.example.com',
+      'x-forwarded-proto': 'https',
+    });
+    assert.equal(replay.response.statusCode, 400);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

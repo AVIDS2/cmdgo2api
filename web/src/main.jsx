@@ -294,13 +294,42 @@ function EmptyUsage({ onLogin }) {
   );
 }
 
-function AuthBanner({ session, onOpen, onCancel }) {
+function AuthBanner({ session, onOpen, onCancel, onSubmitToken, token, tokenShown, onTokenChange, onToggleToken, tokenSaving }) {
   if (!session) return null;
+  if (session.mode === 'manual') {
+    return (
+      <div className="auth-banner auth-banner-manual">
+        <div className="auth-banner-icon"><KeyRound size={18} /></div>
+        <div className="auth-banner-copy">
+          <strong>远程添加账号</strong>
+          <span>官方授权只接受本机回调，请粘贴已在可信设备完成登录的 API Key。</span>
+        </div>
+        <form className="auth-token-form" onSubmit={onSubmitToken}>
+          <label htmlFor="remote-commandcode-token">Command Code API Key</label>
+          <SecretInput
+            id="remote-commandcode-token"
+            value={token}
+            onChange={onTokenChange}
+            shown={tokenShown}
+            onToggle={() => onToggleToken(!tokenShown)}
+            placeholder="粘贴 API Key，不会显示在地址栏"
+            autoFocus
+          />
+          <Button type="submit" size="sm" disabled={tokenSaving || !token.trim()}>
+            {tokenSaving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}
+            验证并添加
+          </Button>
+        </form>
+        <p className="auth-banner-note">请使用 HTTPS 访问此控制台。若要保留官方浏览器授权，可通过 SSH 端口转发后访问本机地址。</p>
+        <Button type="button" size="icon" variant="ghost" aria-label="取消添加账号" title="取消添加账号" onClick={onCancel}><X size={17} /></Button>
+      </div>
+    );
+  }
   return (
     <div className="auth-banner">
       <div className="auth-banner-icon"><LoaderCircle size={18} className="spin" /></div>
       <div className="auth-banner-copy">
-        <strong>等待浏览器完成授权</strong>
+        <strong>等待本地浏览器完成授权</strong>
         <span>授权完成后会自动保存账号 token 并刷新用量。</span>
       </div>
       <Button size="sm" variant="secondary" onClick={onOpen}><ExternalLink size={15} /> 打开授权页</Button>
@@ -365,13 +394,23 @@ function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefres
   );
 }
 
-function Overview({ config, usage, onLogin, onRefresh, refreshing, authSession, onOpenAuth, onCancelAuth, error, actionMessage, onActivateAccount, onDeleteAccount, onRefreshAccounts }) {
+function Overview({ config, usage, onLogin, onRefresh, refreshing, authSession, onOpenAuth, onCancelAuth, onSubmitToken, authToken, authTokenShown, onAuthTokenChange, onToggleAuthToken, authTokenSaving, error, actionMessage, onActivateAccount, onDeleteAccount, onRefreshAccounts }) {
   const monthly = usage?.monthly;
   const hasUsage = Boolean(usage);
   const accounts = config?.accounts || [];
   return (
     <div className="page-body">
-      <AuthBanner session={authSession} onOpen={onOpenAuth} onCancel={onCancelAuth} />
+      <AuthBanner
+        session={authSession}
+        onOpen={onOpenAuth}
+        onCancel={onCancelAuth}
+        onSubmitToken={onSubmitToken}
+        token={authToken}
+        tokenShown={authTokenShown}
+        onTokenChange={onAuthTokenChange}
+        onToggleToken={onToggleAuthToken}
+        tokenSaving={authTokenSaving}
+      />
       {error && <Notice>{error}</Notice>}
       {actionMessage && <Notice type="success">{actionMessage}</Notice>}
       <AccountList
@@ -708,6 +747,12 @@ function Dashboard({
   authSession,
   onOpenAuth,
   onCancelAuth,
+  onSubmitToken,
+  authToken,
+  authTokenShown,
+  onAuthTokenChange,
+  onToggleAuthToken,
+  authTokenSaving,
   error,
   onAddKey,
   onDeleteKey,
@@ -781,6 +826,12 @@ function Dashboard({
             authSession={authSession}
             onOpenAuth={onOpenAuth}
             onCancelAuth={onCancelAuth}
+            onSubmitToken={onSubmitToken}
+            authToken={authToken}
+            authTokenShown={authTokenShown}
+            onAuthTokenChange={onAuthTokenChange}
+            onToggleAuthToken={onToggleAuthToken}
+            authTokenSaving={authTokenSaving}
             error={error}
             actionMessage={actionMessage}
           />
@@ -820,6 +871,9 @@ function App() {
   const [settingsError, setSettingsError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [authSession, setAuthSession] = useState(null);
+  const [authToken, setAuthToken] = useState('');
+  const [authTokenShown, setAuthTokenShown] = useState(false);
+  const [authTokenSaving, setAuthTokenSaving] = useState(false);
   const authPollRef = useRef(null);
   const authPollingBusyRef = useRef(false);
   const usageRefreshingRef = useRef(false);
@@ -840,6 +894,8 @@ function App() {
     setSelectedModelIds(new Set());
     setModelsDirty(false);
     setAuthSession(null);
+    setAuthToken('');
+    setAuthTokenShown(false);
     stopAuthPolling();
   }, [stopAuthPolling]);
 
@@ -1015,6 +1071,13 @@ function App() {
     try {
       const session = await request('/auth/start', { method: 'POST', body: '{}' });
       setAuthSession(session);
+      setAuthToken('');
+      setAuthTokenShown(false);
+      if (session.mode === 'manual') {
+        if (popup) popup.close();
+        stopAuthPolling();
+        return;
+      }
       if (popup) popup.location.href = session.loginUrl;
       else setError('浏览器阻止了新窗口，请点击“打开授权页”。');
       stopAuthPolling();
@@ -1049,9 +1112,35 @@ function App() {
     }
   }, [completeLogin, handleAuthError, hydrateDashboard, stopAuthPolling]);
 
+  const submitAuthToken = useCallback(async (event) => {
+    event.preventDefault();
+    if (!authSession?.state || !authToken.trim()) return;
+    setError('');
+    setAuthTokenSaving(true);
+    try {
+      const data = await request('/auth/token', {
+        method: 'POST',
+        body: JSON.stringify({ state: authSession.state, apiKey: authToken.trim() }),
+      });
+      setAuthSession(null);
+      setAuthToken('');
+      setAuthTokenShown(false);
+      await completeLogin({ configured: true, authenticated: true, account: data.account });
+      await hydrateDashboard();
+      setActionMessage('账号 token 已验证并保存，用量已同步。');
+      window.setTimeout(() => setActionMessage(''), 3500);
+    } catch (caught) {
+      if (!handleAuthError(caught)) setError(caught.message);
+    } finally {
+      setAuthTokenSaving(false);
+    }
+  }, [authSession, authToken, completeLogin, handleAuthError, hydrateDashboard]);
+
   const cancelLogin = useCallback(() => {
     stopAuthPolling();
     setAuthSession(null);
+    setAuthToken('');
+    setAuthTokenShown(false);
   }, [stopAuthPolling]);
 
   const waitForHealthy = useCallback(async () => {
@@ -1294,6 +1383,12 @@ function App() {
       authSession={authSession}
       onOpenAuth={openAuthPage}
       onCancelAuth={cancelLogin}
+      onSubmitToken={submitAuthToken}
+      authToken={authToken}
+      authTokenShown={authTokenShown}
+      onAuthTokenChange={(event) => setAuthToken(event.target.value)}
+      onToggleAuthToken={setAuthTokenShown}
+      authTokenSaving={authTokenSaving}
       error={error}
       onAddKey={addKey}
       onDeleteKey={deleteKey}

@@ -43,7 +43,7 @@ npm --prefix web run build
 npm start
 ```
 
-Open `http://127.0.0.1:3050/console`, set the gateway key, and select **Add account** to complete the official Command Code browser authorization. Account tokens, gateway keys, and quota snapshots are stored in the runtime directories; keep those directories when upgrading or recreating a container.
+Open `http://127.0.0.1:3050/console`, set the gateway key, and select **Add account**. Local access uses the official Command Code browser authorization; public access switches to a manual API-key flow.
 
 ### Docker Compose
 
@@ -82,7 +82,7 @@ commandcode/
 |------|--------|-------------|
 | `port` | `3000` | Listen port (repo config.json ships with `3050`) |
 | `host` | `0.0.0.0` | Listen address |
-| `publicUrl` | `""` | Public origin used for browser auth callbacks; derived from the request when empty |
+| `publicUrl` | `""` | Legacy public-callback setting; retained for compatibility and cannot bypass the loopback-only upstream auth rule |
 | `apiBase` | `https://api.commandcode.ai` | CC API base URL |
 | `projectSlug` | `cc-proxy` | `x-project-slug` header |
 | `apiKey` | `""` | Optional fallback API key (requests can also send it via header) |
@@ -101,7 +101,7 @@ commandcode/
 |----------|-----------|
 | `PORT` | `port` |
 | `HOST` | `host` |
-| `CC_PUBLIC_URL` | `publicUrl`; recommended when using a fixed public domain |
+| `CC_PUBLIC_URL` | `publicUrl`; legacy compatibility setting, not used for remote account authorization |
 | `CONSOLE_PUBLIC_URL` | `publicUrl`; compatibility alias for `CC_PUBLIC_URL` |
 | `CC_API_BASE` | `apiBase` |
 | `PROJECT_SLUG` | `projectSlug` |
@@ -132,7 +132,7 @@ The console is available at `/console`; its management API is under `/admin/api`
 - The model manager reads the full catalog from the upstream Provider API. All models are allowed by default; saved restrictions hide models from `/v1/models` and return `HTTP 403` for direct calls.
 - Usage refreshes in the background every 60 seconds while the console is open.
 - Update and restart runs only when the Git worktree is clean, using `git pull --ff-only`, frontend dependency installation, and a production build. Local changes are refused rather than overwritten.
-- Browser authorization now returns to the proxy service instead of always redirecting to the visitor's machine. When `CC_PUBLIC_URL` is not set, the callback is derived from `X-Forwarded-Proto`, `X-Forwarded-Host`, and `Host`; behind a reverse proxy or fixed domain, set `CC_PUBLIC_URL=https://console.example.com` and forward `/callback` to the proxy. With a public URL configured, consoles opened from `127.0.0.1`, `localhost`, or `::1` still use the local callback while remote consoles use the public callback. HTTPS is recommended for public deployments.
+- Local consoles (`127.0.0.1`, `localhost`, or `::1`) use the official browser authorization and loopback callback. Remote consoles do not generate a public callback because Command Code only accepts loopback callbacks; they use a manual API-key flow instead. Run `cmd login` on a trusted local device, then paste the `apiKey` from `~/.commandcode/auth.json` into the HTTPS console. SSH port forwarding is also supported when you want to keep the full browser flow.
 
 Runtime credentials are stored in `~/.config/commandcode-proxy/credentials.env`, model settings in `~/.config/commandcode-proxy/settings.json`, and multiple account tokens plus cached quotas in `~/.config/commandcode-proxy/accounts.json`. The active account is also mirrored to `~/.commandcode/auth.json` for compatibility. Files are created with restrictive permissions; an older single-account `auth.json` is migrated automatically and must not be committed or copied to a public directory.
 
@@ -483,7 +483,6 @@ Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to the
 docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
 docker run -d --name cc-proxy -p 3050:3050 \
   -e PORT=3050 \
-  -e CC_PUBLIC_URL=https://console.example.com \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
   ghcr.io/maxeaglet/commandcode-proxy:latest
@@ -498,10 +497,10 @@ docker compose build
 docker compose up -d
 ```
 
-The proxy will listen on `http://0.0.0.0:3050` and provide `/console`. Direct access through the server's public address automatically generates a remote callback. For a reverse proxy or fixed domain, set `CC_PUBLIC_URL`:
+The proxy will listen on `http://0.0.0.0:3050` and provide `/console`. Public-domain access uses HTTPS manual API-key entry; local access uses the official browser authorization:
 
 ```bash
-CC_PUBLIC_URL=https://console.example.com docker compose up -d --build
+docker compose up -d --build
 ```
 
 Set `PROXY_PORT` to customize the host port:
@@ -531,7 +530,7 @@ npm run docker:build:multi
 |----------|---------|-------------|
 | `PORT` | `3050` | Container listen port |
 | `PROXY_PORT` | `3050` | Host port (compose only) |
-| `CC_PUBLIC_URL` | empty | Public origin for browser auth callbacks, e.g. `https://console.example.com` |
+| `CC_PUBLIC_URL` | empty | Legacy public-callback setting; retained for compatibility but cannot bypass Command Code's loopback-only callback restriction |
 | `CC_MAX_BODY_MB` | `100` | Max request body size in MB; oversized requests are rejected with `HTTP 413` |
 
 For container deployments, mount `/root/.config/commandcode-proxy` and `/root/.commandcode` so gateway keys, model settings, multiple account tokens, and cached quotas survive container recreation.
@@ -540,7 +539,7 @@ For container deployments, mount `/root/.config/commandcode-proxy` and `/root/.c
 
 This project is for **educational and research purposes** only.
 
-This repository is a continuation of the upstream [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) project under its MIT License. Keep the repository's `LICENSE` file and its `Copyright (c) 2026 MAXeaglet` notice when redistributing; the Web console, multi-account token storage and switching, quota display, runtime management, and deployment adaptations added here are released under the same license. Command Code and its services belong to their respective rights holders; this is not official Command Code software.
+This repository is a continuation of the upstream [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) project under its MIT License. Keep the repository's `LICENSE` file and its `Copyright (c) 2026 MAXeaglet` notice when redistributing; the Web console, multi-account token storage and switching, quota display, runtime management, remote manual account entry, and deployment adaptations added here are released under the same license. Command Code and its services belong to their respective rights holders; this is not official Command Code software.
 
 - **Unofficial**: This project is not affiliated with Command Code in any way; the Web console is an original management interface added by this repository.
 - **Personal Use**: Users assume all responsibility. Please comply with the [Command Code Terms of Service](https://commandcode.ai/tos).

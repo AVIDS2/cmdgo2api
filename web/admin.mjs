@@ -141,6 +141,14 @@ function validateGatewayKey(value) {
   return key;
 }
 
+function validateUpstreamToken(value) {
+  const token = text(value);
+  if (!token || token.length > 4096 || /[\r\n]/.test(token)) {
+    throw new AdminError('Command Code API Key 不能为空，且不能包含换行');
+  }
+  return token;
+}
+
 function writeRuntimeCredentials(runtimeDir, { ccApiKey, gatewayKeys }) {
   const upstream = text(ccApiKey);
   if (/\r|\n/.test(upstream)) throw new AdminError('密钥不能包含换行符');
@@ -532,23 +540,22 @@ function isLoopbackHost(value) {
 }
 
 function browserCallbackUrl(request, url, config) {
-  const forwardedProto = firstForwardedValue(request.headers?.['x-forwarded-proto']).toLowerCase();
-  const protocol = forwardedProto
-    ? (forwardedProto.endsWith(':') ? forwardedProto : `${forwardedProto}:`)
-    : (request.socket?.encrypted ? 'https:' : (url.protocol || 'http:'));
-  const host = firstForwardedValue(request.headers?.['x-forwarded-host'])
+  const host = requestHost(request, url, config);
+  if (!isLoopbackHost(host)) throw new AdminError('只有本机控制台可以使用浏览器回调', 400);
+  const origin = publicOrigin(`http://${host}`);
+  origin.pathname = '/callback';
+  return origin.toString();
+}
+
+function requestHost(request, url, config) {
+  return firstForwardedValue(request.headers?.['x-forwarded-host'])
     || firstForwardedValue(request.headers?.host)
     || url.host
     || `127.0.0.1:${Number(config.port)}`;
-  const configured = text(config.publicUrl || config.consolePublicUrl);
-  if (configured && !isLoopbackHost(host)) {
-    const origin = publicOrigin(configured);
-    origin.pathname = '/callback';
-    return origin.toString();
-  }
-  const origin = publicOrigin(`${protocol}//${host}`);
-  origin.pathname = '/callback';
-  return origin.toString();
+}
+
+function isLocalConsoleRequest(request, url, config) {
+  return isLoopbackHost(requestHost(request, url, config));
 }
 
 function sessionCookie(request, value, maxAge) {
@@ -730,6 +737,25 @@ export function createAdminController({
       usageError: nextAccount.usageError ?? previous.usageError,
     };
     return accountStore.accounts[index];
+  }
+
+  function storeAccountToken(payload) {
+    const token = saveAuthToken(authFile, payload);
+    const current = currentCredentials();
+    const account = normalizeStoredAccount({
+      ...token,
+      id: accountIdForToken(token),
+    });
+    const previousActiveId = accountStore.activeAccountId;
+    replaceAccount(account);
+    const matched = accountStore.accounts.find((item) => accountMatches(item, account));
+    accountStore = persistAccounts({ ...accountStore, activeAccountId: matched?.id || account.id });
+    if (previousActiveId !== accountStore.activeAccountId || current.ccApiKey !== account.apiKey) {
+      writeActiveAccountRuntime();
+    } else {
+      saveAuthToken(authFile, matched || account);
+    }
+    return { token, account: matched || account };
   }
 
   function writeActiveAccountRuntime() {
@@ -1169,14 +1195,71 @@ export function createAdminController({
     if (url.pathname === '/admin/api/auth/start' && request.method === 'POST') {
       try {
         const state = randomBytes(24).toString('base64url');
+        const local = isLocalConsoleRequest(request, url, config);
+        const session = { createdAt: Date.now(), status: 'pending', mode: local ? 'browser' : 'manual' };
+        browserSessions.set(state, session);
+        if (!local) {
+          sendJson(response, 200, {
+            ok: true,
+            state,
+            mode: 'manual',
+            expiresIn: BROWSER_SESSION_TTL_MS / 1000,
+          });
+          return true;
+        }
         const callback = browserCallbackUrl(request, url, config);
         const loginUrl = new URL('/studio/auth/cli', CALLBACK_BASE);
         loginUrl.searchParams.set('callback', callback);
         loginUrl.searchParams.set('state', state);
         loginUrl.searchParams.set('mode', 'redirect');
         loginUrl.searchParams.set('client', 'commandcode-proxy-web');
-        browserSessions.set(state, { createdAt: Date.now(), status: 'pending' });
-        sendJson(response, 200, { ok: true, state, loginUrl: loginUrl.toString(), expiresIn: BROWSER_SESSION_TTL_MS / 1000 });
+        sendJson(response, 200, {
+          ok: true,
+          state,
+          mode: 'browser',
+          loginUrl: loginUrl.toString(),
+          expiresIn: BROWSER_SESSION_TTL_MS / 1000,
+        });
+      } catch (error) {
+        sendError(response, error);
+      }
+      return true;
+    }
+
+    if (url.pathname === '/admin/api/auth/token' && request.method === 'POST') {
+      try {
+        const body = await readBody(request);
+        const state = text(body.state);
+        const session = browserSessions.get(state);
+        if (!session || session.mode !== 'manual') throw new AdminError('远程添加账号会话不存在或已过期', 400);
+        if (session.status !== 'pending') throw new AdminError('远程添加账号会话已经使用，请重新点击“添加账号”', 400);
+        if (!isSecureRequest(request)) throw new AdminError('远程添加账号必须通过 HTTPS 控制台提交', 400);
+        const apiKey = validateUpstreamToken(body.apiKey || body.token);
+        let whoami;
+        try {
+          const base = text(config.apiBase) || DEFAULT_API_BASE;
+          whoami = await fetchJson(`${base}/alpha/whoami?limits=1`, apiKey);
+        } catch (error) {
+          if (error instanceof AdminError && error.status === 401) {
+            throw new AdminError('Command Code API Key 无效，请重新复制后再试', 400);
+          }
+          throw error;
+        }
+        const user = isObject(whoami?.user) ? whoami.user : {};
+        const stored = storeAccountToken({
+          apiKey,
+          userId: text(user.id || user.userId || 'manual-entry'),
+          userName: text(user.userName || user.name || 'Command Code 账号'),
+          email: text(user.email),
+          keyName: 'web-manual-entry',
+        });
+        session.status = 'success';
+        session.account = publicAccount(stored.account, accountStore.activeAccountId);
+        sendJson(response, 200, {
+          ok: true,
+          account: session.account,
+          ...accountPayload(),
+        });
       } catch (error) {
         sendError(response, error);
       }
@@ -1240,24 +1323,10 @@ export function createAdminController({
       if (!session) throw new AdminError('登录状态无效或已过期', 400);
       if (payload.error) throw new AdminError(text(payload.error_description) || text(payload.error));
       if (!text(payload.apiKey)) throw new AdminError('登录回调缺少 apiKey');
-      const token = saveAuthToken(authFile, payload);
-      const current = currentCredentials();
-      const account = normalizeStoredAccount({
-        ...token,
-        id: accountIdForToken(token),
-      });
-      const previousActiveId = accountStore.activeAccountId;
-      replaceAccount(account);
-      const matched = accountStore.accounts.find((item) => accountMatches(item, account));
-      accountStore = persistAccounts({ ...accountStore, activeAccountId: matched?.id || account.id });
-      if (previousActiveId !== accountStore.activeAccountId || current.ccApiKey !== account.apiKey) {
-        writeActiveAccountRuntime();
-      } else {
-        saveAuthToken(authFile, matched || account);
-      }
+      const stored = storeAccountToken(payload);
       session.status = 'success';
-      session.account = publicAccount(matched || account, accountStore.activeAccountId);
-      sendText(response, 200, successPage(token.userName), 'text/html; charset=utf-8');
+      session.account = publicAccount(stored.account, accountStore.activeAccountId);
+      sendText(response, 200, successPage(stored.token.userName), 'text/html; charset=utf-8');
     } catch (error) {
       const session = browserSessions.get(state || text(url.searchParams.get('state')));
       if (session) {
