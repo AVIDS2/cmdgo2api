@@ -95,10 +95,15 @@ if (!options.server || !options.state || !options.ticket) {
       }
       try {
         const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-        child.unref();
-        return true;
+        return new Promise((resolve) => {
+          child.once('spawn', () => {
+            child.unref();
+            resolve(true);
+          });
+          child.once('error', () => resolve(false));
+        });
       } catch {
-        return false;
+        return Promise.resolve(false);
       }
     }
 
@@ -175,7 +180,7 @@ if (!options.server || !options.state || !options.ticket) {
       process.exitCode = 1;
     });
 
-    callbackServer.listen(0, '127.0.0.1', () => {
+    callbackServer.listen(0, '127.0.0.1', async () => {
       const address = callbackServer.address();
       const port = typeof address === 'object' && address ? address.port : 0;
       const loginUrl = new URL('/studio/auth/cli', AUTH_ORIGIN);
@@ -184,7 +189,7 @@ if (!options.server || !options.state || !options.ticket) {
       loginUrl.searchParams.set('mode', 'redirect');
       loginUrl.searchParams.set('client', 'commandcode-proxy-bridge');
       console.log('授权助手已启动，正在打开 Command Code 官方授权页。');
-      if (!openBrowser(loginUrl.toString())) {
+      if (!await openBrowser(loginUrl.toString())) {
         console.log(`请在本机浏览器打开：${loginUrl.toString()}`);
       }
     });
