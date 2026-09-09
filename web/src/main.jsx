@@ -297,6 +297,35 @@ function EmptyUsage({ onLogin }) {
 
 function AuthBanner({ session, onOpen, onCancel, onSubmitToken, token, tokenShown, onTokenChange, onToggleToken, tokenSaving }) {
   if (!session) return null;
+  if (session.mode === 'bridge') {
+    const helperCommand = /Windows/i.test(navigator.userAgent) ? session.powershellCommand : session.command;
+    const commandLabel = /Windows/i.test(navigator.userAgent) ? 'Windows PowerShell' : '终端';
+    const copyCommand = async () => {
+      try {
+        await navigator.clipboard.writeText(helperCommand || '');
+      } catch {
+        // 剪贴板不可用时不影响用户手动复制命令。
+      }
+    };
+    return (
+      <div className="auth-banner auth-banner-bridge">
+        <div className="auth-banner-icon"><KeyRound size={18} /></div>
+        <div className="auth-banner-copy">
+          <strong>远程授权助手已准备</strong>
+          <span>在你自己的电脑终端运行下面命令，官方授权完成后会自动添加账号，无需获取或粘贴 token。</span>
+        </div>
+        <div className="auth-helper-command">
+          <div className="auth-helper-command-heading"><span>{commandLabel}命令</span><span>有效期约 10 分钟</span></div>
+          <div className="auth-helper-command-line">
+            <code>{helperCommand || '授权命令生成失败，请重新点击“添加账号”。'}</code>
+            <Button type="button" size="icon" variant="ghost" onClick={copyCommand} aria-label="复制授权命令" title="复制授权命令"><Copy size={15} /></Button>
+          </div>
+        </div>
+        <p className="auth-banner-note">请保持此页面打开。授权助手只在本机接收官方回调，并通过 HTTPS 提交到当前远程控制台；完成后会自动关闭本地回调服务。</p>
+        <Button type="button" size="icon" variant="ghost" aria-label="取消添加账号" title="取消添加账号" onClick={onCancel}><X size={17} /></Button>
+      </div>
+    );
+  }
   if (session.mode === 'manual') {
     return (
       <div className="auth-banner auth-banner-manual">
@@ -1081,7 +1110,9 @@ function App() {
         stopAuthPolling();
         return;
       }
-      if (popup) popup.location.href = session.loginUrl;
+      if (session.mode === 'bridge') {
+        if (popup) popup.close();
+      } else if (popup) popup.location.href = session.loginUrl;
       else setError('浏览器阻止了新窗口，请点击“打开授权页”。');
       stopAuthPolling();
       authPollRef.current = window.setInterval(async () => {

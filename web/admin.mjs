@@ -20,6 +20,7 @@ import { extname, join, relative, resolve } from 'path';
 const DEFAULT_API_BASE = 'https://api.commandcode.ai';
 const CALLBACK_BASE = 'https://commandcode.ai';
 const BROWSER_SESSION_TTL_MS = 10 * 60 * 1000;
+const BRIDGE_SESSION_TTL_MS = 10 * 60 * 1000;
 const CONSOLE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const CONSOLE_COOKIE_NAME = 'cc_console_session';
 const MAX_GATEWAY_KEYS = 32;
@@ -55,6 +56,10 @@ function hasOwn(value, key) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 function unquoteEnvValue(value) {
@@ -93,6 +98,10 @@ function readRuntimeCredentials(runtimeDir) {
 
 function stableKeyId(value) {
   return `key-${createHash('sha256').update(value).digest('hex').slice(0, 16)}`;
+}
+
+function hashBridgeTicket(value) {
+  return createHash('sha256').update(String(value)).digest('hex');
 }
 
 function normalizeGatewayKeys(source, legacy = '') {
@@ -547,6 +556,26 @@ function browserCallbackUrl(request, url, config) {
   return origin.toString();
 }
 
+function requestOrigin(request, url, config) {
+  const forwardedProto = firstForwardedValue(request.headers?.['x-forwarded-proto']);
+  const protocol = forwardedProto || (request.socket?.encrypted ? 'https' : 'http');
+  return publicOrigin(`${protocol}://${requestHost(request, url, config)}`);
+}
+
+function bridgeCommands(origin, state, ticket) {
+  const helperUrl = new URL('/admin/api/auth/bridge/helper', origin).toString();
+  const args = [
+    '--server', origin.toString(),
+    '--state', state,
+    '--ticket', ticket,
+  ];
+  return {
+    helperUrl,
+    command: `curl -fsSL ${shellQuote(helperUrl)} | node - ${args.map(shellQuote).join(' ')}`,
+    powershellCommand: `(Invoke-WebRequest -UseBasicParsing -Uri ${powershellQuote(helperUrl)}).Content | node - ${args.map(powershellQuote).join(' ')}`,
+  };
+}
+
 function requestHost(request, url, config) {
   return firstForwardedValue(request.headers?.['x-forwarded-host'])
     || firstForwardedValue(request.headers?.host)
@@ -756,6 +785,27 @@ export function createAdminController({
       saveAuthToken(authFile, matched || account);
     }
     return { token, account: matched || account };
+  }
+
+  async function verifyAndStoreToken(apiKey, keyName) {
+    let whoami;
+    try {
+      const base = text(config.apiBase) || DEFAULT_API_BASE;
+      whoami = await fetchJson(`${base}/alpha/whoami?limits=1`, apiKey);
+    } catch (error) {
+      if (error instanceof AdminError && error.status === 401) {
+        throw new AdminError('Command Code API Key 无效，请重新授权后再试', 400);
+      }
+      throw error;
+    }
+    const user = isObject(whoami?.user) ? whoami.user : {};
+    return storeAccountToken({
+      apiKey,
+      userId: text(user.id || user.userId || 'commandcode-account'),
+      userName: text(user.userName || user.name || 'Command Code 账号'),
+      email: text(user.email),
+      keyName,
+    });
   }
 
   function writeActiveAccountRuntime() {
@@ -994,6 +1044,61 @@ export function createAdminController({
       return true;
     }
 
+    if (url.pathname === '/admin/api/auth/bridge/helper' && request.method === 'GET') {
+      const helperPath = join(projectDir, 'tools', 'remote-login.mjs');
+      if (!existsSync(helperPath)) {
+        sendText(response, 404, '授权助手不存在');
+        return true;
+      }
+      try {
+        sendText(response, 200, readFileSync(helperPath, 'utf8'), 'text/javascript; charset=utf-8');
+      } catch (error) {
+        sendError(response, error);
+      }
+      return true;
+    }
+
+    if (url.pathname === '/admin/api/auth/bridge/complete' && request.method === 'POST') {
+      try {
+        if (!isSecureRequest(request)) throw new AdminError('远程授权助手必须通过 HTTPS 提交', 400);
+        const body = await readBody(request);
+        const state = text(body.state);
+        const ticket = text(body.ticket);
+        const session = browserSessions.get(state);
+        if (!session || session.mode !== 'bridge' || !ticket || !session.ticketHash || !safeEqual(hashBridgeTicket(ticket), session.ticketHash)) {
+          throw new AdminError('授权助手票据无效或已过期', 400);
+        }
+        if (session.status !== 'pending') throw new AdminError('远程授权会话已经使用，请重新点击“添加账号”', 400);
+
+        session.ticketHash = '';
+        if (body.error) {
+          session.status = 'error';
+          session.error = text(body.errorDescription || body.error).slice(0, 240) || '官方授权失败';
+          sendJson(response, 200, { ok: true, status: session.status });
+          return true;
+        }
+
+        try {
+          const apiKey = validateUpstreamToken(body.apiKey);
+          const stored = await verifyAndStoreToken(apiKey, 'web-bridge-helper');
+          session.status = 'success';
+          session.account = publicAccount(stored.account, accountStore.activeAccountId);
+          sendJson(response, 200, {
+            ok: true,
+            status: session.status,
+            account: session.account,
+          });
+        } catch (error) {
+          session.status = 'error';
+          session.error = error instanceof AdminError ? error.message : '远程授权处理失败';
+          throw error;
+        }
+      } catch (error) {
+        sendError(response, error);
+      }
+      return true;
+    }
+
     const currentSession = requireConsoleSession(request, response);
     if (!currentSession) return true;
 
@@ -1196,14 +1301,25 @@ export function createAdminController({
       try {
         const state = randomBytes(24).toString('base64url');
         const local = isLocalConsoleRequest(request, url, config);
-        const session = { createdAt: Date.now(), status: 'pending', mode: local ? 'browser' : 'manual' };
+        let origin = null;
+        if (!local) {
+          if (!isSecureRequest(request)) throw new AdminError('远程添加账号必须通过 HTTPS 控制台进行', 400);
+          origin = requestOrigin(request, url, config);
+          if (origin.protocol !== 'https:') throw new AdminError('远程添加账号必须使用 HTTPS 地址', 400);
+        }
+        const session = { createdAt: Date.now(), status: 'pending', mode: local ? 'browser' : 'bridge' };
         browserSessions.set(state, session);
         if (!local) {
+          const ticket = randomBytes(32).toString('base64url');
+          session.ticketHash = hashBridgeTicket(ticket);
+          session.expiresAt = Date.now() + BRIDGE_SESSION_TTL_MS;
+          const commands = bridgeCommands(origin, state, ticket);
           sendJson(response, 200, {
             ok: true,
             state,
-            mode: 'manual',
-            expiresIn: BROWSER_SESSION_TTL_MS / 1000,
+            mode: 'bridge',
+            ...commands,
+            expiresIn: BRIDGE_SESSION_TTL_MS / 1000,
           });
           return true;
         }
@@ -1235,24 +1351,7 @@ export function createAdminController({
         if (session.status !== 'pending') throw new AdminError('远程添加账号会话已经使用，请重新点击“添加账号”', 400);
         if (!isSecureRequest(request)) throw new AdminError('远程添加账号必须通过 HTTPS 控制台提交', 400);
         const apiKey = validateUpstreamToken(body.apiKey || body.token);
-        let whoami;
-        try {
-          const base = text(config.apiBase) || DEFAULT_API_BASE;
-          whoami = await fetchJson(`${base}/alpha/whoami?limits=1`, apiKey);
-        } catch (error) {
-          if (error instanceof AdminError && error.status === 401) {
-            throw new AdminError('Command Code API Key 无效，请重新复制后再试', 400);
-          }
-          throw error;
-        }
-        const user = isObject(whoami?.user) ? whoami.user : {};
-        const stored = storeAccountToken({
-          apiKey,
-          userId: text(user.id || user.userId || 'manual-entry'),
-          userName: text(user.userName || user.name || 'Command Code 账号'),
-          email: text(user.email),
-          keyName: 'web-manual-entry',
-        });
+        const stored = await verifyAndStoreToken(apiKey, 'web-manual-entry');
         session.status = 'success';
         session.account = publicAccount(stored.account, accountStore.activeAccountId);
         sendJson(response, 200, {

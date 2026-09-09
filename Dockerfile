@@ -9,6 +9,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package.json config.json proxy.mjs ./
 COPY web/admin.mjs ./web/admin.mjs
+COPY tools ./tools
 COPY --from=web-build /build/web/dist ./web/dist
 EXPOSE 3050
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

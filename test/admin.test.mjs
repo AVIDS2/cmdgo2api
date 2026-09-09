@@ -163,9 +163,11 @@ test('控制台支持添加、切换和删除多个账号', async () => {
   assert.equal(existsSync(authFile), false);
 });
 
-test('本地使用浏览器授权，远程入口切换为手动添加账号', async () => {
+test('本地使用浏览器授权，远程通过本地授权助手自动桥接', async () => {
   const directory = makeTemporaryDirectory();
   const runtimeDir = join(directory, 'runtime');
+  mkdirSync(join(directory, 'tools'), { recursive: true });
+  writeFileSync(join(directory, 'tools', 'remote-login.mjs'), 'console.log("helper");\n');
   const config = {
     apiBase: 'https://api.commandcode.ai',
     gatewayApiKey: 'gateway-pass',
@@ -195,12 +197,21 @@ test('本地使用浏览器授权，远程入口切换为手动添加账号', as
     'x-forwarded-host': 'fixed.example.com',
     'x-forwarded-proto': 'https',
   });
-  assert.equal(remoteStart.payload.mode, 'manual');
+  assert.equal(remoteStart.payload.mode, 'bridge');
   assert.equal(remoteStart.payload.loginUrl, undefined);
-  const insecureAdded = await call(controller, 'POST', '/admin/api/auth/token', {
+  const ticketMatch = remoteStart.payload.command.match(/['"]--ticket['"] ['"]([^'"]+)['"]/);
+  assert.ok(ticketMatch);
+  const ticket = ticketMatch[1];
+  assert.match(remoteStart.payload.helperUrl, /^https:\/\/fixed\.example\.com\/admin\/api\/auth\/bridge\/helper$/);
+  const helper = await call(controller, 'GET', '/admin/api/auth/bridge/helper');
+  assert.equal(helper.response.statusCode, 200);
+  assert.match(helper.response.body, /console\.log/);
+
+  const insecureAdded = await call(controller, 'POST', '/admin/api/auth/bridge/complete', {
     state: remoteStart.payload.state,
+    ticket,
     apiKey: 'user_remote',
-  }, cookie);
+  });
   assert.equal(insecureAdded.response.statusCode, 400);
   const forgedCallback = await call(controller, 'GET', `/callback?state=${encodeURIComponent(remoteStart.payload.state)}&apiKey=user_remote&userId=remote-user&userName=伪造账号`, null, cookie, {
     host: 'fixed.example.com',
@@ -217,23 +228,26 @@ test('本地使用浏览器授权，远程入口切换为手动添加账号', as
     });
   };
   try {
-    const added = await call(controller, 'POST', '/admin/api/auth/token', {
+    const added = await call(controller, 'POST', '/admin/api/auth/bridge/complete', {
       state: remoteStart.payload.state,
+      ticket,
       apiKey: 'user_remote',
-    }, cookie, {
+    }, '', {
       host: 'proxy.internal:3050',
       'x-forwarded-host': 'fixed.example.com',
       'x-forwarded-proto': 'https',
     });
     assert.equal(added.response.statusCode, 200);
     assert.equal(added.payload.account.userName, '远程账号');
-    assert.equal(added.payload.accounts.length, 1);
     assert.equal(JSON.stringify(added.payload).includes('user_remote'), false);
     assert.equal(config.ccApiKey, 'user_remote');
-    const replay = await call(controller, 'POST', '/admin/api/auth/token', {
+    const status = await call(controller, 'GET', `/admin/api/auth/status?state=${encodeURIComponent(remoteStart.payload.state)}`, null, cookie);
+    assert.equal(status.payload.status, 'success');
+    const replay = await call(controller, 'POST', '/admin/api/auth/bridge/complete', {
       state: remoteStart.payload.state,
+      ticket,
       apiKey: 'user_remote',
-    }, cookie, {
+    }, '', {
       host: 'proxy.internal:3050',
       'x-forwarded-host': 'fixed.example.com',
       'x-forwarded-proto': 'https',

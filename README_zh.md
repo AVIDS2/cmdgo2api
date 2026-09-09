@@ -18,7 +18,7 @@ npm --prefix web run build
 npm start        # 启动，监听 http://0.0.0.0:3050
 ```
 
-打开 `http://127.0.0.1:3050/console`。首次没有网关密钥时，控制台会要求设置第一个密钥；设置完成后它既是公网控制台登录密码，也是第一个代理访问密钥。通过本机地址访问时，点击“添加账号”会使用 Command Code 官方浏览器授权；通过公网域名访问时，会切换为手动粘贴已验证的 API Key 流程。
+打开 `http://127.0.0.1:3050/console`。首次没有网关密钥时，控制台会要求设置第一个密钥；设置完成后它既是公网控制台登录密码，也是第一个代理访问密钥。通过本机地址访问时，点击“添加账号”会使用 Command Code 官方浏览器授权；通过公网 HTTPS 域名访问时，控制台会生成一次性授权助手命令，在可信本地电脑运行后自动完成回调和账号添加，不需要获取或粘贴 `usertoken`。
 
 配置了网关密钥后，API 请求通过 `Authorization: Bearer <网关密钥>` 传入（Anthropic SDK 可用 `x-api-key`）。没有配置网关密钥时，仍兼容直接传入 `user_` 开头的上游 API Key：
 
@@ -43,7 +43,7 @@ npm --prefix web run build
 npm start
 ```
 
-启动后访问 `http://127.0.0.1:3050/console`，设置网关密钥，再点击“添加账号”。本地访问可直接完成官方浏览器授权；远程访问请使用 HTTPS，并粘贴在可信本地设备执行 `cmd login` 后得到的 `~/.commandcode/auth.json` 中的 `apiKey`。账号 token、网关密钥和额度快照会保存在运行环境中，升级或重建容器时应保留对应数据目录。
+启动后访问 `http://127.0.0.1:3050/console`，设置网关密钥，再点击“添加账号”。本地访问可直接完成官方浏览器授权；远程访问请使用 HTTPS，控制台会显示适用于当前系统的授权助手命令。复制并在自己的电脑运行该命令，助手会在本机打开官方授权页、接收 `127.0.0.1` 回调，再通过 HTTPS 将授权结果提交到远程代理。账号 token、网关密钥和额度快照会保存在运行环境中，升级或重建容器时应保留对应数据目录。
 
 ### Docker Compose
 
@@ -63,6 +63,7 @@ commandcode/
 ├── package.json          # npm start / npm run dev
 ├── proxy.mjs             # 单文件核心代理（~1900 行）
 ├── web/                  # Web 控制台、管理 API 和前端构建工程
+├── tools/                # 远程授权助手
 ├── Dockerfile            # 容器构建文件（node:22-alpine）
 ├── docker-compose.yml    # 容器编排
 ├── .dockerignore         # 构建上下文排除规则
@@ -130,7 +131,7 @@ header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数�
 - 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
 - 用量在控制台存活期间每 60 秒后台异步刷新一次。
 - “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
-- 本地控制台（`127.0.0.1`、`localhost` 或 `::1`）使用官方浏览器授权和本地回调；远程控制台不会生成公网回调，因为 Command Code 官方明确只接受本机回调。远程添加账号会改用手动 API Key 流程：先在可信本地设备执行 `cmd login`，再将 `~/.commandcode/auth.json` 中的 `apiKey` 粘贴到 HTTPS 控制台。也可以通过 SSH 端口转发访问本机控制台，以保留完整浏览器授权流程。
+- 本地控制台（`127.0.0.1`、`localhost` 或 `::1`）使用官方浏览器授权和本地回调。远程控制台不会伪造公网回调，因为 Command Code 官方明确只接受本机回调；点击“添加账号”后会生成有效期约 10 分钟的一次性授权助手命令。命令在可信本地电脑运行，助手临时监听本机回环地址接收官方回调，并通过 HTTPS 将结果交给远程控制台，页面不会显示或要求粘贴上游 token。一次性票据只以哈希形式保存在服务端，完成后立即失效。也可以通过 SSH 端口转发访问本机控制台，以保留完整浏览器授权流程。
 
 运行时敏感文件位于 `~/.config/commandcode-proxy/credentials.env`，模型设置位于同目录的 `settings.json`，多账号 token 与额度快照位于同目录的 `accounts.json`，当前账号兼容写入 `~/.commandcode/auth.json`。程序会以当前用户权限保存这些文件，升级时会自动迁移旧版单账号 `auth.json`，建议不要将它们加入 Git 或复制到公开目录。
 
@@ -495,7 +496,7 @@ docker compose build
 docker compose up -d
 ```
 
-代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥。通过公网域名访问时，点击“添加账号”使用 HTTPS 手动粘贴 API Key；通过本机地址访问时使用官方浏览器授权。
+代理将在 `http://0.0.0.0:3050` 监听并提供 `/console`。首次启动后访问控制台设置网关密钥。通过公网域名访问时，点击“添加账号”使用 HTTPS 授权助手流程；通过本机地址访问时使用官方浏览器授权。
 
 ```bash
 docker compose up -d --build
@@ -537,7 +538,7 @@ npm run docker:build:multi
 
 本项目仅供**学习和研究**使用。
 
-本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理、远程手动添加账号和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
+本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理、远程授权助手桥接和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
 
 - **非官方**：本项目与 Command Code 无任何关联，非官方产品；Web 控制台为本仓库新增的管理界面。
 - **个人使用**：使用者应自行承担所有责任。请遵守 [Command Code 服务条款](https://commandcode.ai/tos)。
