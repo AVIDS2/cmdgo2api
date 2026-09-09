@@ -1321,6 +1321,8 @@ export function createAdminController({
       state = text(payload.state);
       const session = browserSessions.get(state);
       if (!session) throw new AdminError('登录状态无效或已过期', 400);
+      if (session.mode !== 'browser') throw new AdminError('远程添加账号请使用手动 API Key 流程', 400);
+      if (!isLocalConsoleRequest(request, url, config)) throw new AdminError('浏览器回调只允许来自本机控制台', 400);
       if (payload.error) throw new AdminError(text(payload.error_description) || text(payload.error));
       if (!text(payload.apiKey)) throw new AdminError('登录回调缺少 apiKey');
       const stored = storeAccountToken(payload);
@@ -1329,7 +1331,7 @@ export function createAdminController({
       sendText(response, 200, successPage(stored.token.userName), 'text/html; charset=utf-8');
     } catch (error) {
       const session = browserSessions.get(state || text(url.searchParams.get('state')));
-      if (session) {
+      if (session?.mode === 'browser') {
         session.status = 'error';
         session.error = error instanceof AdminError ? error.message : '登录回调处理失败';
       }

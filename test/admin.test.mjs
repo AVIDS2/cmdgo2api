@@ -197,6 +197,16 @@ test('本地使用浏览器授权，远程入口切换为手动添加账号', as
   });
   assert.equal(remoteStart.payload.mode, 'manual');
   assert.equal(remoteStart.payload.loginUrl, undefined);
+  const insecureAdded = await call(controller, 'POST', '/admin/api/auth/token', {
+    state: remoteStart.payload.state,
+    apiKey: 'user_remote',
+  }, cookie);
+  assert.equal(insecureAdded.response.statusCode, 400);
+  const forgedCallback = await call(controller, 'GET', `/callback?state=${encodeURIComponent(remoteStart.payload.state)}&apiKey=user_remote&userId=remote-user&userName=伪造账号`, null, cookie, {
+    host: 'fixed.example.com',
+    'x-forwarded-proto': 'https',
+  });
+  assert.equal(forgedCallback.response.statusCode, 400);
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
