@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { test } from 'node:test';
+import { browserLaunchSpec } from '../tools/remote-login.mjs';
 import {
   accountIdForToken,
   createAdminController,
@@ -15,6 +16,14 @@ import {
 function makeTemporaryDirectory() {
   return mkdtempSync(join(tmpdir(), 'commandcode-proxy-test-'));
 }
+
+test('Windows 授权助手会把完整授权地址作为一个参数打开', () => {
+  const loginUrl = 'https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A41234%2Fcallback&state=test-state&mode=redirect&client=commandcode-proxy-bridge';
+  assert.deepEqual(browserLaunchSpec(loginUrl, 'win32'), {
+    command: 'explorer.exe',
+    args: [loginUrl],
+  });
+});
 
 function makeRequest(method, path, body = null, cookie = '', extraHeaders = {}) {
   const raw = body === null ? '' : JSON.stringify(body);
