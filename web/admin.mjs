@@ -350,15 +350,24 @@ function windowSnapshot(value) {
   const used = usedValue ?? 0;
   const cap = capValue ?? 0;
   const known = (usedValue !== null && capValue !== null && capValue > 0) || Boolean(source.exceeded);
+  const ratio = cap > 0 ? Math.min(1, Math.max(0, used / cap)) : 0;
   return {
     used,
     cap,
     remaining: Math.max(0, cap - used),
-    ratio: cap > 0 ? Math.min(1, Math.max(0, used / cap)) : 0,
+    ratio,
+    remainingRatio: cap > 0 ? 1 - ratio : 0,
     resetAt: source.resetAt ?? null,
     exceeded: Boolean(source.exceeded),
     known,
   };
+}
+
+function nextMonth(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  date.setUTCMonth(date.getUTCMonth() + 1);
+  return date.toISOString();
 }
 
 function planName(subscription) {
@@ -377,6 +386,11 @@ function normalizeUsage({ whoami, credits, subscription, summary }) {
   const creditData = isObject(credits?.credits) ? credits.credits : {};
   const limits = isObject(credits?.windowLimits) ? credits.windowLimits : {};
   const monthlyCredits = finiteNumber(creditData.monthlyCredits);
+  const monthlyUsed = number(summary?.totalCost);
+  const monthlyRemaining = monthlyCredits ?? 0;
+  const monthlyGranted = finiteNumber(creditData.monthlyCreditsGranted);
+  const monthlyCap = monthlyGranted > 0 ? monthlyGranted : monthlyUsed + monthlyRemaining;
+  const monthlyRatio = monthlyCap > 0 ? Math.min(1, Math.max(0, monthlyUsed / monthlyCap)) : 0;
   return {
     account: {
       id: text(user.id || user.userId),
@@ -385,9 +399,14 @@ function normalizeUsage({ whoami, credits, subscription, summary }) {
     },
     plan: planName(subscription),
     monthly: {
-      used: number(summary?.totalCost),
-      remaining: monthlyCredits ?? 0,
+      used: monthlyUsed,
+      cap: monthlyCap,
+      remaining: monthlyRemaining,
+      ratio: monthlyRatio,
+      remainingRatio: monthlyCap > 0 ? 1 - monthlyRatio : 0,
+      resetAt: subscription?.currentPeriodEnd ?? subscription?.periodEnd ?? nextMonth(subscription?.currentPeriodStart),
       totalCount: number(summary?.totalCount),
+      totalTokens: number(summary?.totalTokens ?? summary?.totalTokensIn + summary?.totalTokensOut),
       known: monthlyCredits !== null,
     },
     fiveHour: windowSnapshot(limits.fiveHour),
@@ -589,7 +608,8 @@ function isLoopbackHost(value) {
 }
 
 function browserCallbackUrl(request, url, config) {
-  const host = requestHost(request, url, config);
+  const directHost = firstForwardedValue(request.headers?.host) || url.host;
+  const host = isLoopbackHost(directHost) ? directHost : requestHost(request, url, config);
   if (!isLoopbackHost(host)) throw new AdminError('只有本机控制台可以使用浏览器回调', 400);
   const origin = publicOrigin(`http://${host}`);
   origin.pathname = '/callback';
@@ -626,7 +646,8 @@ function requestHost(request, url, config) {
 }
 
 function isLocalConsoleRequest(request, url, config) {
-  return isLoopbackHost(requestHost(request, url, config));
+  const directHost = firstForwardedValue(request.headers?.host) || url.host;
+  return isLoopbackHost(directHost) || isLoopbackHost(requestHost(request, url, config));
 }
 
 function sessionCookie(request, value, maxAge) {

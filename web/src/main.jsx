@@ -5,30 +5,23 @@ import {
   ArrowUpRight,
   Check,
   CheckCheck,
-  ChevronRight,
   CircleAlert,
   Clock3,
   Copy,
   ExternalLink,
   Eye,
   EyeOff,
-  Gauge,
   KeyRound,
-  LayoutDashboard,
-  ListChecks,
   LoaderCircle,
   LockKeyhole,
   LogIn,
   LogOut,
-  Menu,
   RefreshCw,
   RotateCcw,
   Search,
   Server,
-  Settings2,
   ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   Trash2,
   Users,
   UserRound,
@@ -220,24 +213,14 @@ function LoadingPage() {
   );
 }
 
-function MetricCard({ label, value, detail, icon: Icon, tone = 'mint' }) {
-  return (
-    <Card className="metric-card">
-      <CardContent className="metric-card-content">
-        <div className={cn('metric-icon', `metric-icon-${tone}`)}><Icon size={17} strokeWidth={2.2} /></div>
-        <div className="metric-label">{label}</div>
-        <div className="metric-value">{value}</div>
-        <div className="metric-detail">{detail}</div>
-      </CardContent>
-    </Card>
-  );
-}
-
 function WindowCard({ title, caption, data, tone = 'mint' }) {
   const used = Number(data?.used || 0);
   const cap = Number(data?.cap || 0);
   const ratio = Number(data?.ratio || 0);
   const remaining = Number(data?.remaining || 0);
+  const calls = data?.totalCount;
+  const tokens = Number(data?.totalTokens || 0);
+  const tokenLabel = `${(tokens / 1_000_000).toFixed(2)}M tokens`;
   return (
     <Card className="window-card">
       <CardHeader className="window-header">
@@ -257,6 +240,7 @@ function WindowCard({ title, caption, data, tone = 'mint' }) {
           <span className="window-remaining">剩余 {formatMoney(remaining)}</span>
           <span className="reset-time"><Clock3 size={14} /> {formatDate(data?.resetAt)} 重置</span>
         </div>
+        {calls !== undefined && <div className="window-calls"><span>本月调用次数 {Number(calls || 0).toLocaleString('zh-CN')} 次</span>{data?.totalTokens !== undefined && <span>总 Token {tokenLabel}</span>}</div>}
       </CardContent>
     </Card>
   );
@@ -280,7 +264,7 @@ function Notice({ type = 'error', children }) {
   return <div className={`${type}-banner`}><Icon size={17} /><span>{children}</span></div>;
 }
 
-function EmptyUsage({ onLogin }) {
+function EmptyUsage() {
   return (
     <Card className="empty-state">
       <CardContent>
@@ -289,7 +273,6 @@ function EmptyUsage({ onLogin }) {
           <h3>还没有连接 Command Code 账号</h3>
           <p>完成官方授权后，用量数据会自动同步到这里。</p>
         </div>
-        <Button onClick={onLogin}><LogIn size={16} /> 浏览器登录</Button>
       </CardContent>
     </Card>
   );
@@ -371,8 +354,12 @@ function AuthBanner({ session, onOpen, onCancel, onSubmitToken, token, tokenShow
 }
 
 function quotaRemaining(account, key) {
-  const value = account?.usage?.[key]?.remaining;
-  return value === undefined || value === null ? '--' : formatMoney(value);
+  const quota = account?.usage?.[key];
+  if (!quota || quota.remaining === undefined || quota.remaining === null) return '--';
+  const percent = Number.isFinite(Number(quota.remainingRatio))
+    ? Math.round(Number(quota.remainingRatio) * 100)
+    : null;
+  return `${formatMoney(quota.remaining)}/${percent === null ? '--' : `${percent}%`}`;
 }
 
 function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefreshAll, refreshing, onLogin }) {
@@ -392,7 +379,7 @@ function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefres
         )}
       />
       {!accounts.length ? (
-        <div className="accounts-empty"><Users size={18} /><span>还没有保存的账号</span><Button type="button" size="sm" onClick={onLogin}><LogIn size={15} /> 浏览器登录</Button></div>
+        <div className="accounts-empty"><Users size={18} /><span>还没有保存的账号，请点击右上角“添加账号”</span></div>
       ) : (
         <div className="account-list">
           {accounts.map((account) => {
@@ -411,7 +398,7 @@ function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefres
                 <div className="account-quotas" aria-label={`${displayName}剩余额度`}>
                   <div className="quota-item"><span>5 小时剩余</span><strong>{quotaRemaining(account, 'fiveHour')}</strong></div>
                   <div className="quota-item"><span>一周剩余</span><strong>{quotaRemaining(account, 'weekly')}</strong></div>
-                  <div className="quota-item"><span>总额剩余</span><strong>{account?.usage?.monthly ? formatMoney(account.usage.monthly.remaining) : '--'}</strong></div>
+                  <div className="quota-item"><span>总额剩余</span><strong>{quotaRemaining(account, 'monthly')}</strong></div>
                 </div>
                 <div className="account-row-actions">
                   {!active && <Button type="button" size="sm" variant="secondary" onClick={() => onActivate(account.id)} disabled={refreshing}>切换</Button>}
@@ -427,7 +414,6 @@ function AccountList({ accounts, activeAccountId, onActivate, onDelete, onRefres
 }
 
 function Overview({ config, usage, onLogin, onRefresh, refreshing, authSession, onOpenAuth, onCancelAuth, onSubmitToken, authToken, authTokenShown, onAuthTokenChange, onToggleAuthToken, authTokenSaving, error, actionMessage, onActivateAccount, onDeleteAccount, onRefreshAccounts }) {
-  const monthly = usage?.monthly;
   const hasUsage = Boolean(usage);
   const accounts = config?.accounts || [];
   return (
@@ -455,25 +441,14 @@ function Overview({ config, usage, onLogin, onRefresh, refreshing, authSession, 
         onLogin={onLogin}
       />
       {!hasUsage ? (
-        <EmptyUsage onLogin={onLogin} />
+        <EmptyUsage />
       ) : (
         <>
-          <SectionHeading
-            eyebrow="Usage overview"
-            title="用量概览"
-            description={formatFetchedAt(usage.fetchedAt)}
-            action={<Badge variant="success"><span className="status-dot" /> 自动同步</Badge>}
-          />
-          <div className="metrics-grid">
-            <MetricCard label="本月已用" value={formatMoney(monthly?.used)} detail={`${Number(monthly?.totalCount || 0).toLocaleString('zh-CN')} 次请求`} icon={Activity} tone="mint" />
-            <MetricCard label="本月余额" value={formatMoney(monthly?.remaining)} detail={`${usage.plan || '未知'} 套餐`} icon={Gauge} tone="blue" />
-            <MetricCard label="5 小时用量" value={`${formatMoney(usage.fiveHour?.used)} / ${formatMoney(usage.fiveHour?.cap)}`} detail={`剩余 ${formatMoney(usage.fiveHour?.remaining)}`} icon={Clock3} tone="orange" />
-            <MetricCard label="一周余额" value={formatMoney(usage.weekly?.remaining)} detail={`已用 ${formatMoney(usage.weekly?.used)}`} icon={Sparkles} tone="pink" />
-          </div>
-          <SectionHeading eyebrow="Rate windows" title="限额窗口" description="按当前套餐实时计算" />
+          <SectionHeading eyebrow="Rate windows" title="限额窗口" description={`${usage.plan || '未知套餐'} · ${formatFetchedAt(usage.fetchedAt)}`} action={<Badge variant="success"><span className="status-dot" /> 自动同步</Badge>} />
           <div className="window-grid">
             <WindowCard title="5 小时窗口" caption="短周期用量" data={usage.fiveHour} tone="orange" />
             <WindowCard title="一周窗口" caption="滚动周额度" data={usage.weekly} tone="mint" />
+            <WindowCard title="本月窗口" caption="当前计费周期" data={usage.monthly} tone="mint" />
           </div>
         </>
       )}
@@ -666,23 +641,16 @@ function Settings({
             <Button variant="secondary" onClick={onRestart} disabled={restarting} className="restart-button">
               {restarting ? <LoaderCircle size={16} className="spin" /> : <RotateCcw size={16} />} 重启代理服务
             </Button>
+            <Separator className="endpoint-separator" />
+            <div className="maintenance-inline">
+              <div className="maintenance-inline-copy"><strong>软件维护</strong><span>检查更新并重新构建控制台</span></div>
+              <Button onClick={onUpdate} disabled={updating} size="sm" className="update-button">
+                {updating ? <LoaderCircle size={15} className="spin" /> : <ArrowUpRight size={15} />} 更新并重启
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
-        <Card className="maintenance-card">
-          <CardHeader>
-            <div className="card-heading-line">
-              <div className="card-heading-icon orange"><RotateCcw size={18} /></div>
-              <div><CardTitle>软件维护</CardTitle><CardDescription>从默认拉取远端更新项目并重新构建。</CardDescription></div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="maintenance-note"><ListChecks size={16} /><span>更新前会检查工作树；存在本地改动时会安全停止。</span></div>
-            <Button onClick={onUpdate} disabled={updating} className="update-button">
-              {updating ? <LoaderCircle size={16} className="spin" /> : <ArrowUpRight size={16} />} 更新项目并重启
-            </Button>
-          </CardContent>
-        </Card>
       </div>
       <ModelManager
         models={models}
@@ -719,36 +687,6 @@ function InfoRow({ label, value, copy, valueTone }) {
       <strong className={valueTone ? `value-${valueTone}` : ''}>{value}</strong>
       {copy && <Button type="button" size="icon" variant="ghost" onClick={copyValue} aria-label="复制地址" title="复制地址">{copied ? <Check size={15} /> : <Copy size={15} />}</Button>}
     </div>
-  );
-}
-
-function Sidebar({ activeView, onNavigate, status, onRefresh, open, onClose }) {
-  const items = [
-    { id: 'overview', label: '用量概览', icon: LayoutDashboard },
-    { id: 'settings', label: '代理设置', icon: Settings2 },
-  ];
-  return (
-    <aside className={cn('sidebar', open && 'sidebar-open')}>
-      <div className="sidebar-head"><Brand /><Button type="button" size="icon" variant="ghost" className="sidebar-close" onClick={onClose} aria-label="关闭导航" title="关闭导航"><X size={18} /></Button></div>
-      <nav className="side-nav" aria-label="主导航">
-        <div className="nav-label">工作区</div>
-        {items.map(({ id, label, icon: Icon }) => (
-          <button type="button" key={id} className={cn('nav-item', activeView === id && 'nav-item-active')} onClick={() => onNavigate(id)}>
-            <Icon size={17} /><span>{label}</span>{activeView === id && <ChevronRight size={15} className="nav-arrow" />}
-          </button>
-        ))}
-      </nav>
-      <div className="sidebar-bottom">
-        <div className="service-mini">
-          <div className={cn('service-mini-icon', status?.healthy ? 'online' : 'offline')}><Server size={16} /></div>
-          <div><strong>{status?.healthy ? '代理运行正常' : '代理未运行'}</strong><span>端口 {status?.port || 3050}</span></div>
-          <span className={cn('service-dot', status?.healthy ? 'online' : 'offline')} />
-        </div>
-        <Separator className="sidebar-separator" />
-        <button type="button" className="sidebar-refresh" onClick={onRefresh}><RefreshCw size={14} /> 检查服务状态</button>
-        <div className="sidebar-footnote">本地运行 · 会话受保护</div>
-      </div>
-    </aside>
   );
 }
 
@@ -798,19 +736,17 @@ function Dashboard({
   actionMessage,
   settingsError,
   onLogout,
-  onStatusRefresh,
 }) {
-  const [navOpen, setNavOpen] = useState(false);
   const pageTitle = activeView === 'overview' ? '用量概览' : '代理设置';
   const pageKicker = activeView === 'overview' ? 'Overview' : 'Configuration';
   return (
     <div className="app-shell">
-      <Sidebar activeView={activeView} onNavigate={(view) => { setActiveView(view); setNavOpen(false); }} status={status} onRefresh={onStatusRefresh} open={navOpen} onClose={() => setNavOpen(false)} />
-      {navOpen && <button type="button" className="sidebar-scrim" onClick={() => setNavOpen(false)} aria-label="关闭导航" />}
       <main className="main-shell">
         <header className="topbar">
-          <Button type="button" size="icon" variant="ghost" className="mobile-menu" onClick={() => setNavOpen(true)} aria-label="打开导航" title="打开导航"><Menu size={19} /></Button>
-          <div className="breadcrumbs"><span>控制台</span><ChevronRight size={14} /><strong>{pageTitle}</strong></div>
+          <div className="topbar-switcher" role="navigation" aria-label="页面切换">
+            <button type="button" className={cn(activeView === 'overview' && 'topbar-switch-active')} onClick={() => setActiveView('overview')}>用量概览</button>
+            <button type="button" className={cn(activeView === 'settings' && 'topbar-switch-active')} onClick={() => setActiveView('settings')}>代理设置</button>
+          </div>
           <div className="topbar-actions">
             <Badge variant={status?.healthy ? 'success' : 'danger'}><span className="status-dot" /> {status?.healthy ? '代理在线' : '代理离线'}</Badge>
             <a href="https://commandcode.ai/docs" target="_blank" rel="noreferrer" aria-label="打开文档" title="打开文档"><ArrowUpRight size={17} /></a>
@@ -1442,7 +1378,6 @@ function App() {
       actionMessage={actionMessage}
       settingsError={settingsError}
       onLogout={logout}
-      onStatusRefresh={loadStatus}
     />
   );
 }

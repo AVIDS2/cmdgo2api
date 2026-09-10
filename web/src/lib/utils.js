@@ -9,7 +9,10 @@ export function formatMoney(value) {
 
 export function formatDate(value) {
   if (!value) return '未知';
-  const date = new Date(Number(value) > 10_000_000_000 ? Number(value) : Number(value) * 1000);
+  const numeric = typeof value === 'number' || (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value.trim()))
+    ? Number(value)
+    : null;
+  const date = new Date(numeric === null ? value : numeric > 10_000_000_000 ? numeric : numeric * 1000);
   if (Number.isNaN(date.getTime())) return '未知';
   return date.toLocaleString('zh-CN', {
     month: '2-digit',

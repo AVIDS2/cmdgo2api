@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
-
+test/
+dist/
 # Logs and command output
 *.log
 stdout.txt
