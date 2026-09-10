@@ -1,8 +1,10 @@
-# Command Code Proxy
+# cmdgo2api
 
 > [English Docs](README.md)
 
-将 Command Code API 转换为 OpenAI / Anthropic 兼容接口的反代代理。核心代理保持单文件结构；Web 控制台作为独立的可选管理层提供。
+将 Command Code API 转换为 OpenAI / Anthropic 兼容接口的反代代理，并附带用于管理多账号的 Web 控制台。核心代理保持单文件结构；Web 控制台作为独立的管理层提供。
+
+> **衍生作品声明**：`cmdgo2api` 是 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy)（MIT License）的独立延续分支。详见[许可与致谢](#许可与致谢)。
 
 基于对官方 CLI 网络流量的分析，精确还原了 Command Code API 的请求协议（含设备指纹与生命周期预请求），并实现了多层兼容适配。
 
@@ -36,8 +38,8 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 需要 Node.js 18 或更高版本。首次部署执行一次前端依赖安装和构建，之后直接启动代理：
 
 ```bash
-git clone https://git.1dea.top/aidea/cmd2api.git
-cd cmd2api
+git clone https://github.com/1deaaa/cmdgo2api.git
+cd cmdgo2api
 npm --prefix web ci --ignore-scripts
 npm --prefix web run build
 npm start
@@ -57,9 +59,9 @@ docker compose logs -f proxy
 ## 文件结构
 
 ```
-commandcode/
+cmdgo2api/
 ├── config.json           # 端口 / 日志路径等
-├── LICENSE               # MIT License
+├── LICENSE               # MIT License（上游 + 本分支）
 ├── package.json          # npm start / npm run dev
 ├── proxy.mjs             # 单文件核心代理（~1900 行）
 ├── web/                  # Web 控制台、管理 API 和前端构建工程
@@ -70,7 +72,7 @@ commandcode/
 ├── .github/
 │   └── workflows/
 │       └── docker-publish.yml  # 打 v* tag 时自动发布 GHCR 多架构镜像
-├── captured-requests/    # CLI 抓包数据（协议逆向参考）
+├── captured-requests/    # CLI 抓包数据（协议逆向参考；仅本地保留，已被 git 忽略，不随仓库分发）
 ├── README.md             # 英文文档
 └── README_zh.md          # 本文档（中文）
 ```
@@ -79,39 +81,39 @@ commandcode/
 
 ### config.json
 
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `port` | `3000` | 监听端口（仓库自带 config.json 为 3050） |
-| `host` | `0.0.0.0` | 监听地址 |
-| `publicUrl` | `""` | 旧版公网回调配置；仅保留兼容，不能绕过上游只允许本机回调的限制 |
-| `apiBase` | `https://api.commandcode.ai` | CC API 地址 |
-| `projectSlug` | `cc-proxy` | `x-project-slug` header |
-| `apiKey` | `""` | 可选兜底 API Key（请求也可通过 header 传入） |
-| `gatewayApiKey` | `""` | 兼容旧配置的单个网关密钥；推荐通过 Web 控制台管理多个密钥 |
-| `gatewayApiKeys` | `[]` | 可选网关密钥数组；第一个密钥也是控制台密码 |
-| `allowedModelIds` | `null` | 可选模型白名单；`null` 表示允许全部模型，控制台设置会写入运行目录 |
-| `logFile` | `""` | 日志文件路径（空=仅控制台） |
-| `logLevel` | `info` | 日志级别 |
-| `useProviderModels` | `true` | 从 Provider API 动态拉取模型列表 |
-| `modelRefreshIntervalMs` | `300000` | 模型列表缓存刷新间隔（5min） |
-| `zdr` | `false` | 请求 Command Code 使用 ZDR-only 路由 |
+| 字段                       | 默认值                         | 说明                                                                |
+| -------------------------- | ------------------------------ | ------------------------------------------------------------------- |
+| `port`                   | `3000`                       | 监听端口（仓库自带 config.json 为 3050）                            |
+| `host`                   | `0.0.0.0`                    | 监听地址                                                            |
+| `publicUrl`              | `""`                         | 旧版公网回调配置；仅保留兼容，不能绕过上游只允许本机回调的限制      |
+| `apiBase`                | `https://api.commandcode.ai` | CC API 地址                                                         |
+| `projectSlug`            | `cc-proxy`                   | `x-project-slug` header                                           |
+| `apiKey`                 | `""`                         | 可选兜底 API Key（请求也可通过 header 传入）                        |
+| `gatewayApiKey`          | `""`                         | 兼容旧配置的单个网关密钥；推荐通过 Web 控制台管理多个密钥           |
+| `gatewayApiKeys`         | `[]`                         | 可选网关密钥数组；第一个密钥也是控制台密码                          |
+| `allowedModelIds`        | `null`                       | 可选模型白名单；`null` 表示允许全部模型，控制台设置会写入运行目录 |
+| `logFile`                | `""`                         | 日志文件路径（空=仅控制台）                                         |
+| `logLevel`               | `info`                       | 日志级别                                                            |
+| `useProviderModels`      | `true`                       | 从 Provider API 动态拉取模型列表                                    |
+| `modelRefreshIntervalMs` | `300000`                     | 模型列表缓存刷新间隔（5min）                                        |
+| `zdr`                    | `false`                      | 请求 Command Code 使用 ZDR-only 路由                                |
 
 ### 环境变量
 
-| 变量 | 对应 config 字段 |
-|------|-----------------|
-| `PORT` | `port` |
-| `HOST` | `host` |
-| `CC_PUBLIC_URL` | `publicUrl`；旧版兼容配置，不用于远程账号授权 |
-| `CONSOLE_PUBLIC_URL` | `publicUrl`；`CC_PUBLIC_URL` 的兼容别名 |
-| `CC_API_BASE` | `apiBase` |
-| `PROJECT_SLUG` | `projectSlug` |
-| `GATEWAY_API_KEY` | `gatewayApiKey` |
-| `GATEWAY_API_KEYS_JSON` | `gatewayApiKeys`（高级用法） |
-| `CC_API_KEY` | Command Code 上游 API Key |
-| `LOG_FILE` | `logFile` |
-| `CC_USE_PROVIDER_MODELS` | `useProviderModels` |
-| `CMD_ZDR` | `zdr`（`1` 开启） |
+| 变量                       | 对应 config 字段                                |
+| -------------------------- | ----------------------------------------------- |
+| `PORT`                   | `port`                                        |
+| `HOST`                   | `host`                                        |
+| `CC_PUBLIC_URL`          | `publicUrl`；旧版兼容配置，不用于远程账号授权 |
+| `CONSOLE_PUBLIC_URL`     | `publicUrl`；`CC_PUBLIC_URL` 的兼容别名     |
+| `CC_API_BASE`            | `apiBase`                                     |
+| `PROJECT_SLUG`           | `projectSlug`                                 |
+| `GATEWAY_API_KEY`        | `gatewayApiKey`                               |
+| `GATEWAY_API_KEYS_JSON`  | `gatewayApiKeys`（高级用法）                  |
+| `CC_API_KEY`             | Command Code 上游 API Key                       |
+| `LOG_FILE`               | `logFile`                                     |
+| `CC_USE_PROVIDER_MODELS` | `useProviderModels`                           |
+| `CMD_ZDR`                | `zdr`（`1` 开启）                           |
 
 开启后，代理会在 Command Code 生成请求以及 fingerprint/lifecycle 初始化请求中附加
 `x-cmd-zdr: 1`。npm 版本检查和代理自己的 `/provider/v1/models` 模型目录请求不会附加该
@@ -144,19 +146,20 @@ OpenAI Chat Completions 兼容。支持流式和非流式、工具调用、多�
 
 **请求体参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `model` | 是 | 模型 ID（见模型列表） |
-| `messages` | 是 | 对话消息，支持 `system/user/assistant/tool` 角色 |
-| `max_tokens` | 否 | 最大生成 token（默认 64000） |
-| `stream` | 否 | 是否 SSE 流式（默认 false） |
-| `temperature` | 否 | 采样温度（0-2）|
-| `reasoning_effort` | 否 | 推理强度 `low`/`medium`/`high`/`max` |
-| `tools` | 否 | 工具定义（OpenAI function calling 格式）|
-| `tool_choice` | 否 | 工具选择策略 |
-| `parallel_tool_calls` | 否 | 是否允许并行工具调用 |
+| 参数                    | 必填 | 说明                                              |
+| ----------------------- | ---- | ------------------------------------------------- |
+| `model`               | 是   | 模型 ID（见模型列表）                             |
+| `messages`            | 是   | 对话消息，支持`system/user/assistant/tool` 角色 |
+| `max_tokens`          | 否   | 最大生成 token（默认 64000）                      |
+| `stream`              | 否   | 是否 SSE 流式（默认 false）                       |
+| `temperature`         | 否   | 采样温度（0-2）                                   |
+| `reasoning_effort`    | 否   | 推理强度`low`/`medium`/`high`/`max`       |
+| `tools`               | 否   | 工具定义（OpenAI function calling 格式）          |
+| `tool_choice`         | 否   | 工具选择策略                                      |
+| `parallel_tool_calls` | 否   | 是否允许并行工具调用                              |
 
 **简单请求：**
+
 ```json
 {
   "model": "deepseek/deepseek-v4-flash",
@@ -166,6 +169,7 @@ OpenAI Chat Completions 兼容。支持流式和非流式、工具调用、多�
 ```
 
 **多模态图片输入（需 vision 模型）：**
+
 ```json
 {
   "model": "xiaomi/mimo-v2.5",
@@ -180,6 +184,7 @@ OpenAI Chat Completions 兼容。支持流式和非流式、工具调用、多�
 ```
 
 **工具调用：**
+
 ```json
 {
   "model": "deepseek/deepseek-v4-flash",
@@ -193,6 +198,7 @@ OpenAI Chat Completions 兼容。支持流式和非流式、工具调用、多�
 ```
 
 **流式响应（SSE）：**
+
 ```
 data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考过程"}}]}
 
@@ -204,6 +210,7 @@ data: [DONE]
 ```
 
 **非流式响应（含缓存命中）：**
+
 ```json
 {
   "id": "chatcmpl-xxx",
@@ -233,6 +240,7 @@ data: [DONE]
 Anthropic Messages API 兼容端点。支持流式和非流式、工具调用。
 
 **请求体：**
+
 ```json
 {
   "model": "claude-sonnet-4-6",
@@ -247,18 +255,19 @@ Anthropic Messages API 兼容端点。支持流式和非流式、工具调用。
 
 **Anthropic 协议差异（自动转换）：**
 
-| 概念 | Anthropic 原始格式 | 转换说明 |
-|------|-------------------|----------|
-| System prompt | 顶层 `system` 字段 | 自动转为 OpenAI `system` message |
-| 消息内容 | `content` 数组（text/tool_use/tool_result） | 自动映射为对应角色 |
-| 工具结果 | `user` 消息中的 `tool_result` 块 | 自动转为 `role: "tool"` |
-| 工具定义 | `input_schema` | 自动映射为 `parameters` |
-| `tool_choice` | `{type:"auto"/"any"/"tool"}` | `any`→`required`，`tool`→function 对象 |
-| 推理强度 | `thinking.budget_tokens` | 自动映射为 `reasoning_effort`（≥10000→high, ≥5000→medium, ≥2000→low） |
-| 停止原因 | `end_turn`/`max_tokens`/`tool_use` | 自动映射为 `stop`/`length`/`tool_calls` |
-| Token 用量 | `input_tokens`/`output_tokens` + 缓存 | 透传，缓存字段映射为 Anthropic 格式 |
+| 概念            | Anthropic 原始格式                            | 转换说明                                                                     |
+| --------------- | --------------------------------------------- | ---------------------------------------------------------------------------- |
+| System prompt   | 顶层`system` 字段                           | 自动转为 OpenAI`system` message                                            |
+| 消息内容        | `content` 数组（text/tool_use/tool_result） | 自动映射为对应角色                                                           |
+| 工具结果        | `user` 消息中的 `tool_result` 块          | 自动转为`role: "tool"`                                                     |
+| 工具定义        | `input_schema`                              | 自动映射为`parameters`                                                     |
+| `tool_choice` | `{type:"auto"/"any"/"tool"}`                | `any`→`required`，`tool`→function 对象                               |
+| 推理强度        | `thinking.budget_tokens`                    | 自动映射为`reasoning_effort`（≥10000→high, ≥5000→medium, ≥2000→low） |
+| 停止原因        | `end_turn`/`max_tokens`/`tool_use`      | 自动映射为`stop`/`length`/`tool_calls`                                 |
+| Token 用量      | `input_tokens`/`output_tokens` + 缓存     | 透传，缓存字段映射为 Anthropic 格式                                          |
 
 **流式响应（SSE，Anthropic 格式）：**
+
 ```
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_xxx","type":"message","role":"assistant","content":[],"model":"...","usage":{"input_tokens":0,"output_tokens":0}}}
@@ -280,6 +289,7 @@ data: {"type":"message_stop"}
 ```
 
 **非流式响应：**
+
 ```json
 {
   "id": "msg_xxx",
@@ -308,12 +318,12 @@ data: {"type":"message_stop"}
 
 ## 错误码
 
-| HTTP 状态 | 说明 |
-|-----------|------|
-| 400 | 请求格式错误 |
-| 401 | API Key 缺失/格式不对/无效（Key 必须以 `user_` 开头；通过 `Authorization: Bearer` 或 `x-api-key` 传入） |
-| 429 | 零输出 token，或流空闲超时（30s 流式 / 90s 非流式）——带 `Retry-After`，SDK 自动重试；连续 3 次超时返回"压缩上下文"提示 |
-| 502 | CC 上游错误 |
+| HTTP 状态 | 说明                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 400       | 请求格式错误                                                                                                              |
+| 401       | API Key 缺失/格式不对/无效（Key 必须以`user_` 开头；通过 `Authorization: Bearer` 或 `x-api-key` 传入）              |
+| 429       | 零输出 token，或流空闲超时（30s 流式 / 90s 非流式）——带`Retry-After`，SDK 自动重试；连续 3 次超时返回"压缩上下文"提示 |
+| 502       | CC 上游错误                                                                                                               |
 
 ## 模型列表
 
@@ -321,24 +331,25 @@ data: {"type":"message_stop"}
 
 ### 常用模型
 
-| 模型 ID | 提供商 |
-|---------|--------|
-| `claude-sonnet-4-6` / `claude-opus-4-8` / `claude-opus-4-7` / `claude-haiku-4-5-20251001` | Anthropic |
-| `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex` | OpenAI |
-| `deepseek/deepseek-v4-pro` / `deepseek/deepseek-v4-flash` | DeepSeek |
-| `moonshotai/Kimi-K2.6` / `moonshotai/Kimi-K2.5` | Kimi |
-| `zai-org/GLM-5.1` / `zai-org/GLM-5` | GLM |
-| `MiniMaxAI/MiniMax-M3` / `MiniMaxAI/MiniMax-M2.7` / `MiniMaxAI/MiniMax-M2.5` | MiniMax |
-| `Qwen/Qwen3.7-Max` / `Qwen/Qwen3.6-Max-Preview` / `Qwen/Qwen3.6-Plus` | Qwen |
-| `stepfun/Step-3.7-Flash` / `stepfun/Step-3.5-Flash` | Step |
-| `xiaomi/mimo-v2.5-pro` / `xiaomi/mimo-v2.5` | Xiaomi（**支持图片输入**） |
-| `google/gemini-3.5-flash` / `google/gemini-3.1-flash-lite` | Gemini |
+| 模型 ID                                                                                           | 提供商                           |
+| ------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `claude-sonnet-4-6` / `claude-opus-4-8` / `claude-opus-4-7` / `claude-haiku-4-5-20251001` | Anthropic                        |
+| `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex`                                  | OpenAI                           |
+| `deepseek/deepseek-v4-pro` / `deepseek/deepseek-v4-flash`                                     | DeepSeek                         |
+| `moonshotai/Kimi-K2.6` / `moonshotai/Kimi-K2.5`                                               | Kimi                             |
+| `zai-org/GLM-5.1` / `zai-org/GLM-5`                                                           | GLM                              |
+| `MiniMaxAI/MiniMax-M3` / `MiniMaxAI/MiniMax-M2.7` / `MiniMaxAI/MiniMax-M2.5`                | MiniMax                          |
+| `Qwen/Qwen3.7-Max` / `Qwen/Qwen3.6-Max-Preview` / `Qwen/Qwen3.6-Plus`                       | Qwen                             |
+| `stepfun/Step-3.7-Flash` / `stepfun/Step-3.5-Flash`                                           | Step                             |
+| `xiaomi/mimo-v2.5-pro` / `xiaomi/mimo-v2.5`                                                   | Xiaomi（**支持图片输入**） |
+| `google/gemini-3.5-flash` / `google/gemini-3.1-flash-lite`                                    | Gemini                           |
 
 > ⚠️ 部分模型（如 `deepseek-v4-flash`、`claude-sonnet-4-6`）不支持图片输入。如需多模态请用 `xiaomi/mimo-v2.5`、`Kimi-K2.5` 等 vision 模型。
 
 ## 接入示例
 
 ### Python (OpenAI SDK)
+
 ```python
 from openai import OpenAI
 
@@ -357,6 +368,7 @@ for chunk in response:
 ```
 
 ### cURL
+
 ```bash
 curl http://127.0.0.1:3050/v1/chat/completions \
   -H "Authorization: Bearer <网关密钥>" \
@@ -369,12 +381,15 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 ```
 
 ### Cursor
+
 在 Cursor 设置中添加 Custom Provider：
+
 - **API Base URL**: `http://127.0.0.1:3050/v1`
 - **API Key**: `<网关密钥>`
 - **Model**: 从模型列表中选择
 
 ### Anthropic (Python SDK)
+
 ```python
 import anthropic
 
@@ -394,6 +409,7 @@ print(message.content[0].text)
 Anthropic SDK 通过 `x-api-key` 头鉴权——代理已原生支持（无需 `Authorization` 头）。
 
 ### OpenCode
+
 ```json
 {
   "provider": "openai-compatible",
@@ -406,23 +422,23 @@ Anthropic SDK 通过 `x-api-key` 头鉴权——代理已原生支持（无需 `
 
 基于对官方 CLI 网络流量的分析（版本号从 npm registry 动态拉取），实现了以下兼容适配：
 
-| 机制 | 实现 |
-|------|------|
-| **设备指纹** | 每个 Key 首次请求前发送 `POST /alpha/fingerprint/record`；随机指纹池（15 种 CPU、全球时区）、SHA-256 哈希、per-key 绑定，每 8h+2h 抖动刷新 |
-| **生命周期声明** | 会话初始化时与指纹并行发送 `POST /alpha/lifecycle-events`（`cli_session_exists`） |
-| **按 Key 分 Session** | 每个 API Key 独立 session，12h 过期 + 1h 随机抖动 |
-| **动态版本号** | `x-command-code-version` 从 npm registry 自动拉取（24h 刷新） |
-| **CLI 信封格式** | config/memory/taste/skills/permissionMode/params |
-| **OpenTelemetry** | `traceparent` (W3C Trace Context) |
-| **环境标识** | `x-cli-environment: production`、`x-co-flag: "false"`、`x-taste-learning: "false"` |
-| **Project Slug** | 从 sessionId 生成的 `x-project-slug`（与真实 CLI 格式一致） |
-| **思考强度** | `reasoning_effort` 透传 (low/medium/high/max) |
-| **API Key 格式验证** | 对 `Authorization: Bearer` 或 `x-api-key` 用正则 `user_[a-zA-Z0-9_-]+` 提取，自动清理多余路径/前缀，`sk-xxx` 等非 `user_` 格式拒 |
-| **流式超时保护** | 流式 30s、非流式 90s → 429 + SDK 自动重试 |
-| **连续超时阈值** | 连续 3 次超时后才提示压缩上下文 |
-| **零输出防护** | outputTokens=0 → 429 `rate_limit_error`（SDK 自动重试，反异常计费） |
-| **上游中止** | 客户端断连 + 全部错误路径 `AbortController` 打断 CC |
-| **隐私保护日志** | 日志不含 API Key 片段、错误 body、stack trace |
+| 机制                        | 实现                                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **设备指纹**          | 每个 Key 首次请求前发送`POST /alpha/fingerprint/record`；随机指纹池（15 种 CPU、全球时区）、SHA-256 哈希、per-key 绑定，每 8h+2h 抖动刷新 |
+| **生命周期声明**      | 会话初始化时与指纹并行发送`POST /alpha/lifecycle-events`（`cli_session_exists`）                                                        |
+| **按 Key 分 Session** | 每个 API Key 独立 session，12h 过期 + 1h 随机抖动                                                                                           |
+| **动态版本号**        | `x-command-code-version` 从 npm registry 自动拉取（24h 刷新）                                                                             |
+| **CLI 信封格式**      | config/memory/taste/skills/permissionMode/params                                                                                            |
+| **OpenTelemetry**     | `traceparent` (W3C Trace Context)                                                                                                         |
+| **环境标识**          | `x-cli-environment: production`、`x-co-flag: "false"`、`x-taste-learning: "false"`                                                    |
+| **Project Slug**      | 从 sessionId 生成的`x-project-slug`（与真实 CLI 格式一致）                                                                                |
+| **思考强度**          | `reasoning_effort` 透传 (low/medium/high/max)                                                                                             |
+| **API Key 格式验证**  | 对`Authorization: Bearer` 或 `x-api-key` 用正则 `user_[a-zA-Z0-9_-]+` 提取，自动清理多余路径/前缀，`sk-xxx` 等非 `user_` 格式拒   |
+| **流式超时保护**      | 流式 30s、非流式 90s → 429 + SDK 自动重试                                                                                                  |
+| **连续超时阈值**      | 连续 3 次超时后才提示压缩上下文                                                                                                             |
+| **零输出防护**        | outputTokens=0 → 429`rate_limit_error`（SDK 自动重试，反异常计费）                                                                       |
+| **上游中止**          | 客户端断连 + 全部错误路径`AbortController` 打断 CC                                                                                        |
+| **隐私保护日志**      | 日志不含 API Key 片段、错误 body、stack trace                                                                                               |
 
 ## 协议细节
 
@@ -480,15 +496,19 @@ CLI 发送图片的格式：
 每次打 `v*` tag 时 GitHub Actions 会自动构建并推送多架构镜像（`linux/amd64` + `linux/arm64`）到 GitHub Container Registry：
 
 ```bash
-docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
-docker run -d --name cc-proxy -p 3050:3050 \
+docker pull ghcr.io/1deaaa/cmdgo2api:latest
+docker run -d --name cmdgo2api -p 3050:3050 \
   -e PORT=3050 \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
-  ghcr.io/maxeaglet/commandcode-proxy:latest
+  ghcr.io/1deaaa/cmdgo2api:latest
 ```
 
 每次发版都会更新 `latest` 标签。镜像为公共可见，拉取无需登录。
+
+> 本仓库目前还没有 release tag，上面的镜像会在第一次推送 `v*` tag 时生成（`.github/workflows/docker-publish.yml` 也支持推送 `release` 分支或手动触发）。在此之前请使用 `docker compose up -d --build` 或本地构建镜像。
+
+> 上游另外发布了 `ghcr.io/maxeaglet/commandcode-proxy`。那个镜像是**未经修改的上游构建**，不包含 Web 控制台、多账号切换和远程授权助手等功能。要使用本分支的功能，请拉取上面的镜像或自行从源码构建。
 
 ### 快速启动 (docker compose)
 
@@ -526,20 +546,36 @@ npm run docker:build:multi
 
 ### 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `3050` | 容器内监听端口 |
-| `PROXY_PORT` | `3050` | 主机映射端口（仅 compose） |
-| `CC_PUBLIC_URL` | 空 | 旧版公网回调配置，仅保留兼容；不能绕过 Command Code 只允许本机回调的限制 |
-| `CC_MAX_BODY_MB` | `100` | 请求体大小上限（MB），超限请求返回 `HTTP 413` |
+| 变量               | 默认值   | 说明                                                                     |
+| ------------------ | -------- | ------------------------------------------------------------------------ |
+| `PORT`           | `3050` | 容器内监听端口                                                           |
+| `PROXY_PORT`     | `3050` | 主机映射端口（仅 compose）                                               |
+| `CC_PUBLIC_URL`  | 空       | 旧版公网回调配置，仅保留兼容；不能绕过 Command Code 只允许本机回调的限制 |
+| `CC_MAX_BODY_MB` | `100`  | 请求体大小上限（MB），超限请求返回`HTTP 413`                           |
 
 容器部署建议挂载 `/root/.config/commandcode-proxy` 和 `/root/.commandcode`，否则容器删除后会丢失网关密钥、模型权限、多账号 token 和额度快照。
+
+## 许可与致谢
+
+本项目以 **MIT License** 发布，详见 [`LICENSE`](LICENSE)。
+
+本仓库是衍生作品，版权声明按「原作者在前、本分支在后」的顺序并列两位持有人：
+
+```
+Copyright (c) 2026 MAXeaglet
+Copyright (c) 2026 1deaaa
+```
+
+- **原项目** —— [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy)，作者 [@MAXeaglet](https://github.com/MAXeaglet)。反代核心、Command Code 请求协议实现（含设备指纹与生命周期预请求）和原始文档均出自该作者，本仓库保留了上游的 Git 提交历史。
+- **本分支** —— [`1deaaa/cmdgo2api`](https://github.com/1deaaa/cmdgo2api)，作者 [@1deaaa](https://github.com/1deaaa)。本仓库新增的内容包括：Web 控制台与管理 API、多账号 token 暂存与一键切换、每账号 5 小时 / 一周 / 总额度展示、运行时更新重启管理、远程授权助手桥接，以及配套的部署适配与文档。
+
+如果你分发本项目或其修改版本，请完整保留 `LICENSE` 文件以及其中的**两行**版权声明。删除上游声明会违反 MIT 条款——该条款要求在所有副本或实质性部分中保留原始版权与许可声明。在原有声明之上追加自己的版权行（即本仓库的做法）是衍生作品的通行惯例，不会削弱任何一方的权利。
+
+Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
 
 ## 免责声明
 
 本项目仅供**学习和研究**使用。
-
-本仓库基于上游项目 [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) 继续开发，遵循上游 MIT License。分发本修改版本时必须保留仓库中的 `LICENSE` 文件及其中的 `Copyright (c) 2026 MAXeaglet` 版权声明；本版本新增的 Web 控制台、多账号 token 暂存与切换、额度展示、运行时管理、远程授权助手桥接和部署适配也按同一许可发布。Command Code 名称、网站和服务属于其各自权利人，本项目不是 Command Code 官方软件，也不代表 Command Code。
 
 - **非官方**：本项目与 Command Code 无任何关联，非官方产品；Web 控制台为本仓库新增的管理界面。
 - **个人使用**：使用者应自行承担所有责任。请遵守 [Command Code 服务条款](https://commandcode.ai/tos)。

@@ -1,11 +1,47 @@
+# Dependencies
 node_modules/
+
+# Logs and command output
 *.log
-*.zip
+stdout.txt
+stderr.txt
+
+# Runtime credentials / account tokens — NEVER commit these.
+# The proxy stores them in ~/.config/commandcode-proxy/ and ~/.commandcode/ by default,
+# but a custom runtime directory can drop them into the repo.
+.commandcode/
+.opencode/
+credentials.env
+auth.json
+accounts.json
+settings.json
+
+# Environment files
+.env
+.env.*
+
+# Temporary / scratch
+temp/
+
+# Captured CLI traffic (contains upstream auth headers — must never be published)
+captured-requests/
+
+# Local agent / tooling state
 .omo/
 .agents/
 AGENTS.md
-stdout.txt
-stderr.txt
-captured-requests/
+
+# Archives
+*.zip
+
+# Keys
+*.pem
+*.key
+
+# Python
 __pycache__/
 *.py[cod]
+
+# OS junk
+.DS_Store
+Thumbs.db

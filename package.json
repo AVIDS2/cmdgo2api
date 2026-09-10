@@ -4,6 +4,18 @@
   "type": "module",
   "description": "Command Code → OpenAI 兼容代理",
   "license": "MIT",
+  "author": "1deaaa (https://github.com/1deaaa)",
+  "contributors": [
+    "MAXeaglet (https://github.com/MAXeaglet) — original commandcode-proxy"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1deaaa/cmdgo2api.git"
+  },
+  "homepage": "https://github.com/1deaaa/cmdgo2api#readme",
+  "bugs": {
+    "url": "https://github.com/1deaaa/cmdgo2api/issues"
+  },
   "main": "proxy.mjs",
   "scripts": {
     "start": "node proxy.mjs",

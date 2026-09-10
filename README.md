@@ -1,8 +1,10 @@
-# Command Code Proxy
+# cmdgo2api
 
 > [中文文档](README_zh.md)
 
-A reverse proxy that converts Command Code API to OpenAI / Anthropic compatible endpoints. The proxy core remains a single file; the optional Web console is provided as a separate management layer.
+A reverse proxy that converts Command Code API to OpenAI / Anthropic compatible endpoints, with a bundled Web console for managing multiple accounts. The proxy core remains a single file; the Web console is provided as a separate management layer.
+
+> **Derivative work notice.** `cmdgo2api` is an independent continuation of [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) (MIT License). The reverse-proxy core, the Command Code protocol implementation, and the original documentation come from that upstream project and remain under `Copyright (c) 2026 MAXeaglet`. The Web console, multi-account token storage and switching, quota display, and the remote authorization-helper bridge are additions made in this repository. See [License and Credits](#license-and-credits).
 
 Built by analyzing official CLI network traffic to accurately replicate the Command Code API request protocol, including device-fingerprint and lifecycle pre-requests.
 
@@ -36,8 +38,8 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 Node.js 18 or newer is required. Install frontend dependencies and build once, then start the proxy:
 
 ```bash
-git clone https://git.1dea.top/aidea/cmd2api.git
-cd cmd2api
+git clone https://github.com/1deaaa/cmdgo2api.git
+cd cmdgo2api
 npm --prefix web ci --ignore-scripts
 npm --prefix web run build
 npm start
@@ -57,9 +59,9 @@ The default host port is `3050`. Override it with `PROXY_PORT=13050 docker compo
 ## File Structure
 
 ```
-commandcode/
+cmdgo2api/
 ├── config.json           # Port / log path etc.
-├── LICENSE               # MIT License
+├── LICENSE               # MIT License (upstream + this fork)
 ├── package.json          # npm start / npm run dev
 ├── proxy.mjs             # Single-file proxy core (~1900 lines)
 ├── web/                  # Web console, admin API, and frontend build project
@@ -70,7 +72,7 @@ commandcode/
 ├── .github/
 │   └── workflows/
 │       └── docker-publish.yml  # GHCR multi-arch publish on v* tags
-├── captured-requests/    # Captured CLI traffic (protocol analysis reference)
+├── captured-requests/    # Captured CLI traffic (protocol analysis reference; local only, git-ignored, not distributed)
 ├── README.md             # This document (English)
 └── README_zh.md          # Chinese documentation
 ```
@@ -482,15 +484,19 @@ The proxy receives OpenAI `image_url` format and converts it to the above CC for
 Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to the GitHub Container Registry automatically on every `v*` tag via GitHub Actions:
 
 ```bash
-docker pull ghcr.io/maxeaglet/commandcode-proxy:latest
-docker run -d --name cc-proxy -p 3050:3050 \
+docker pull ghcr.io/1deaaa/cmdgo2api:latest
+docker run -d --name cmdgo2api -p 3050:3050 \
   -e PORT=3050 \
   -v cc-proxy-runtime:/root/.config/commandcode-proxy \
   -v cc-proxy-auth:/root/.commandcode \
-  ghcr.io/maxeaglet/commandcode-proxy:latest
+  ghcr.io/1deaaa/cmdgo2api:latest
 ```
 
 The `latest` tag is updated on each release. The image is public — no login required to pull.
+
+> This repository has no release tag yet, so the image above is created by the first `v*` tag push (the workflow in `.github/workflows/docker-publish.yml` also accepts a `release` branch push or a manual run). Until then, use `docker compose up -d --build` or build the image locally.
+
+> Upstream also publishes `ghcr.io/maxeaglet/commandcode-proxy`. That image is the **unmodified upstream build** and does **not** include the Web console, multi-account switching, or the remote authorization-helper bridge. Use the image above (or build from source) to get this fork's features.
 
 ### Quick Start (docker compose)
 
@@ -537,11 +543,27 @@ npm run docker:build:multi
 
 For container deployments, mount `/root/.config/commandcode-proxy` and `/root/.commandcode` so gateway keys, model settings, multiple account tokens, and cached quotas survive container recreation.
 
+## License and Credits
+
+Released under the **MIT License**. See [`LICENSE`](LICENSE).
+
+This repository is a derivative work. The copyright notice lists both holders, original first:
+
+```
+Copyright (c) 2026 MAXeaglet
+Copyright (c) 2026 1deaaa
+```
+
+- **Original project** — [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) by [@MAXeaglet](https://github.com/MAXeaglet). The reverse-proxy core, the Command Code request-protocol implementation (including device-fingerprint and lifecycle pre-requests), and the original documentation are that author's work, and this repository retains the upstream Git history.
+- **This fork** — [`1deaaa/cmdgo2api`](https://github.com/1deaaa/cmdgo2api) by [@1deaaa](https://github.com/1deaaa). Contributions here: the Web console and admin API, multi-account token storage with one-click switching, per-account five-hour / weekly / total quota display, runtime update-and-restart management, the remote authorization-helper bridge, and the related deployment adaptations and documentation.
+
+If you redistribute this project or a modified version of it, keep the `LICENSE` file intact with **both** copyright lines. Removing the upstream notice would breach the MIT terms, which require the original copyright and permission notice to be included in all copies or substantial portions of the Software. Adding your own copyright line on top of the existing one — as done here — is the normal convention for a derivative work and does not weaken anyone's rights.
+
+Command Code and its services belong to their respective rights holders; this is not official Command Code software.
+
 ## Disclaimer
 
 This project is for **educational and research purposes** only.
-
-This repository is a continuation of the upstream [`MAXeaglet/commandcode-proxy`](https://github.com/MAXeaglet/commandcode-proxy) project under its MIT License. Keep the repository's `LICENSE` file and its `Copyright (c) 2026 MAXeaglet` notice when redistributing; the Web console, multi-account token storage and switching, quota display, runtime management, remote authorization-helper bridge, and deployment adaptations added here are released under the same license. Command Code and its services belong to their respective rights holders; this is not official Command Code software.
 
 - **Unofficial**: This project is not affiliated with Command Code in any way; the Web console is an original management interface added by this repository.
 - **Personal Use**: Users assume all responsibility. Please comply with the [Command Code Terms of Service](https://commandcode.ai/tos).
