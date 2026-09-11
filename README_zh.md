@@ -15,8 +15,7 @@
 ## 快速开始
 
 ```bash
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build    # 安装并构建前端控制台
 npm start        # 启动，监听 http://0.0.0.0:3050
 ```
 
@@ -40,8 +39,7 @@ curl http://127.0.0.1:3050/v1/chat/completions \
 ```bash
 git clone https://github.com/1deaaa/cmdgo2api.git
 cd cmdgo2api
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build    # 安装并构建前端控制台
 npm start
 ```
 
@@ -62,7 +60,7 @@ docker compose logs -f proxy
 cmdgo2api/
 ├── config.json           # 端口 / 日志路径等
 ├── LICENSE               # MIT License（上游 + 本分支）
-├── package.json          # npm start / npm run dev
+├── package.json          # npm start / npm run build / npm run dev
 ├── proxy.mjs             # 单文件核心代理（~1900 行）
 ├── web/                  # Web 控制台、管理 API 和前端构建工程
 ├── tools/                # 远程授权助手
@@ -537,8 +535,7 @@ PROXY_PORT=13050 docker compose up -d
 ### 从源码构建
 
 ```bash
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build
 docker build -t commandcode-proxy:latest .
 docker run -d -p 3050:3050 -e PORT=3050 commandcode-proxy:latest
 ```
@@ -731,6 +728,6 @@ Command Code 名称、网站和服务属于其各自权利人，本项目不是 
 ## 开发
 
 ```bash
-npm --prefix web run dev
-npm run dev
+npm run web:dev   # 前端开发服务器
+npm run dev       # 代理（node --watch 自动重启）
 ```

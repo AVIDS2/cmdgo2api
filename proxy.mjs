@@ -665,7 +665,7 @@ function tryParseJSON(str) {
 
 // ── CC NDJSON → OpenAI SSE 转换 ────────────────────
 
-function createSseTranslator(model, completionId, created) {
+function createSseTranslator(model, completionId, created, apiKey) {
   let chunkIndex = 0;
   let sentRole = false;
   let finishReason = null;
@@ -764,7 +764,7 @@ function createSseTranslator(model, completionId, created) {
         case 'error': {
           const msg = event.error?.message || event.message || 'Unknown error';
           log('warn', 'CC stream error', { message: msg });
-          this.upstreamError = mapCcEventError(event);
+          this.upstreamError = mapCcEventError(event, apiKey);
           // Don't emit a finish_reason chunk — let the natural stream termination
           // handle it. Otherwise a subsequent finish(tool_calls) would be ignored
           // by downstream agent loops that stop at the first finish_reason.
@@ -822,6 +822,26 @@ function mapFinishReason(reason) {
 }
 
 // ── 错误映射 ───────────────────────────────────────
+// 下游账号自动切换钩子：由 web/admin.mjs 的控制器注册（见文件末尾）。
+// 上游请求命中额度窗口限制时立即切号，而不是等控制台的 60 秒用量轮询。
+let upstreamQuotaLimitHandler = null;
+
+function reportUpstreamQuotaLimit(info) {
+  if (typeof upstreamQuotaLimitHandler !== 'function') return;
+  try {
+    const result = upstreamQuotaLimitHandler(info);
+    if (result?.switched) {
+      log('info', 'Upstream quota limit reached, switched active account', {
+        window: result.window,
+        previousAccountId: result.previousAccountId,
+        accountId: result.account?.id,
+      });
+    }
+  } catch (error) {
+    log('warn', 'Upstream quota limit auto-switch failed', { message: error?.message || String(error) });
+  }
+}
+
 const CC_STATUS_MAP = {
   400: { status: 400, type: 'invalid_request_error' },
   401: { status: 401, type: 'authentication_error' },
@@ -835,18 +855,27 @@ const CC_STATUS_MAP = {
   503: { status: 503, type: 'temporarily_unavailable' },
 };
 
-function mapCcError(ccStatus, ccBody) {
+function mapCcError(ccStatus, ccBody, apiKey) {
   const mapped = CC_STATUS_MAP[ccStatus] || { status: 502, type: 'upstream_error' };
   let message = `CC API error (${ccStatus})`;
+  let parsedBody = null;
 
   if (ccBody) {
     try {
-      const parsed = JSON.parse(ccBody);
-      message = parsed.error?.message || parsed.message || message;
+      parsedBody = JSON.parse(ccBody);
+      message = parsedBody.error?.message || parsedBody.message || message;
     } catch {
       message = ccBody.slice(0, 200) || message;
     }
   }
+
+  reportUpstreamQuotaLimit({
+    status: ccStatus,
+    code: parsedBody?.error?.code ?? parsedBody?.code,
+    message,
+    rateLimit: parsedBody?.error?.rateLimit ?? parsedBody?.rateLimit,
+    apiKey,
+  });
 
   // CC 429 响应可能带 retry-after
   if (ccStatus === 429) {
@@ -862,11 +891,19 @@ function mapCcError(ccStatus, ccBody) {
   return { status: mapped.status, body: { error: { message, type: mapped.type } } };
 }
 
-function mapCcEventError(event) {
+function mapCcEventError(event, apiKey) {
   const message = event.error?.message || event.message || 'Unknown CC error';
   const statusMatch = message.match(/^<(\d{3})>/);
   const ccStatus = statusMatch ? Number(statusMatch[1]) : 502;
   const mapped = CC_STATUS_MAP[ccStatus] || { status: 502, type: 'upstream_error' };
+
+  reportUpstreamQuotaLimit({
+    status: ccStatus,
+    code: event.error?.code ?? event.code,
+    message,
+    rateLimit: event.error?.rateLimit ?? event.rateLimit,
+    apiKey,
+  });
 
   // 与 mapCcError 保持一致：终态为 429 时带上 retry_after，
   // 否则客户端 SDK 拿不到退避提示（402 也映射成 429，一视同仁）
@@ -1106,7 +1143,7 @@ async function handleChatCompletions(req, res) {
     if (!ccResponse.ok) {
       const errorText = await ccResponse.text().catch(() => '');
       log('error', 'CC API error', { status: ccResponse.status });
-      const mapped = mapCcError(ccResponse.status, errorText);
+      const mapped = mapCcError(ccResponse.status, errorText, apiKey);
       sendJSON(res, mapped.status, mapped.body);
       return;
     }
@@ -1149,7 +1186,7 @@ async function handleChatCompletions(req, res) {
 
     if (stream) {
       // ── 流式响应 ──
-      translator = createSseTranslator(model, completionId, created);
+      translator = createSseTranslator(model, completionId, created, apiKey);
       let buffer = '';
       let started = false; // 延迟写 200 header，超时/output=0 时返回 JSON 429/502 让 SDK 自动重试
       const decoder = new TextDecoder();
@@ -1330,7 +1367,7 @@ async function handleChatCompletions(req, res) {
               case 'error':
                 lastCcEvent = event.type;
                 log('warn', 'CC stream error (non-stream)', { message: event.error?.message || event.message });
-                upstreamError = mapCcEventError(event);
+                upstreamError = mapCcEventError(event, apiKey);
                 break;
               case 'reasoning-end': case 'provider-metadata': case 'tool-input-start': case 'tool-input-delta': case 'tool-input-end': case 'tool-error': case 'text-end':
                 // Silent - no user-visible content
@@ -1632,7 +1669,7 @@ function convertAnthropicToOpenAI(anthropicReq) {
  * Async generator that reads CC NDJSON response body and yields
  * Anthropic SSE events for streaming.
  */
-async function* createAnthropicSseTranslator(response, model, messageId, ctx) {
+async function* createAnthropicSseTranslator(response, model, messageId, ctx, apiKey) {
   let nextBlockIndex = 0;
   let currentBlockIndex = -1;
   let currentBlockType = null;
@@ -1791,7 +1828,7 @@ async function* createAnthropicSseTranslator(response, model, messageId, ctx) {
 
           case 'error': {
             hasError = true;
-            const upstreamError = mapCcEventError(event);
+            const upstreamError = mapCcEventError(event, apiKey);
             ctx.upstreamError = upstreamError;
             yield `event: error\ndata: ${JSON.stringify({ type: 'error', error: upstreamError.body.error })}\n\n`;
             break;
@@ -1895,7 +1932,7 @@ async function handleMessages(req, res) {
     if (!ccResponse.ok) {
       const errorText = await ccResponse.text().catch(() => '');
       log('error', 'CC API error (Anthropic)', { status: ccResponse.status });
-      const mapped = mapCcError(ccResponse.status, errorText);
+      const mapped = mapCcError(ccResponse.status, errorText, apiKey);
       sendAnthropicError(res, mapped.status, mapped.body.error.type, mapped.body.error.message);
       return;
     }
@@ -1965,7 +2002,7 @@ async function handleMessages(req, res) {
       try {
         messageId = 'msg_' + randomUUID().slice(0, 12);
         ctx = { bytesReceived: 0, lastCcEvent: '', inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, upstreamError: null };
-        const generator = createAnthropicSseTranslator(ccResponse, model, messageId, ctx);
+        const generator = createAnthropicSseTranslator(ccResponse, model, messageId, ctx, apiKey);
         for await (const event of generator) {
           if (aborted) break;
           if (!started && !event.startsWith('event: message_start')) {
@@ -2098,7 +2135,7 @@ async function handleMessages(req, res) {
               case 'error':
                 lastCcEvent = event.type;
                 log('warn', 'CC error (Anthropic non-stream)', { message: event.error?.message || event.message });
-                upstreamError = mapCcEventError(event);
+                upstreamError = mapCcEventError(event, apiKey);
                 break;
               case 'reasoning-end': case 'provider-metadata': case 'tool-input-start': case 'tool-input-delta': case 'tool-input-end': case 'tool-error': case 'text-end':
                 // Silent - no user-visible content
@@ -2371,8 +2408,7 @@ async function updateProject() {
     throw error;
   }
   await runMaintenanceCommand('git', ['pull', '--ff-only']);
-  await runMaintenanceCommand('npm', ['--prefix', 'web', 'install', '--ignore-scripts', '--no-audit', '--no-fund']);
-  await runMaintenanceCommand('npm', ['--prefix', 'web', 'run', 'build']);
+  await runMaintenanceCommand('npm', ['run', 'build']);
   return { message: '项目已更新，正在重启代理服务' };
 }
 
@@ -2403,6 +2439,7 @@ const adminController = createAdminController({
   update: updateProject,
   relaunch: relaunchProcess,
 });
+upstreamQuotaLimitHandler = (info) => adminController.handleUpstreamQuotaLimit(info);
 
 // 全局兜底：abort 触发的异步 rejection 不会让进程崩溃
 process.on('unhandledRejection', (reason) => {

@@ -15,8 +15,7 @@ Built by analyzing official CLI network traffic to accurately replicate the Comm
 ## Quick Start
 
 ```bash
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build    # Install and build the web console
 npm start        # Start (the repo ships with config.json listening on http://0.0.0.0:3050)
 ```
 
@@ -40,8 +39,7 @@ Node.js 18 or newer is required. Install frontend dependencies and build once, t
 ```bash
 git clone https://github.com/1deaaa/cmdgo2api.git
 cd cmdgo2api
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build    # Install and build the web console
 npm start
 ```
 
@@ -62,7 +60,7 @@ The default host port is `3050`. Override it with `PROXY_PORT=13050 docker compo
 cmdgo2api/
 ├── config.json           # Port / log path etc.
 ├── LICENSE               # MIT License (upstream + this fork)
-├── package.json          # npm start / npm run dev
+├── package.json          # npm start / npm run build / npm run dev
 ├── proxy.mjs             # Single-file proxy core (~1900 lines)
 ├── web/                  # Web console, admin API, and frontend build project
 ├── tools/                # Remote authorization helper
@@ -525,8 +523,7 @@ PROXY_PORT=13050 docker compose up -d
 ### Build from Source
 
 ```bash
-npm --prefix web ci --ignore-scripts
-npm --prefix web run build
+npm run build
 docker build -t commandcode-proxy:latest .
 docker run -d -p 3050:3050 -e PORT=3050 commandcode-proxy:latest
 ```
@@ -713,6 +710,6 @@ This project is for **educational and research purposes** only.
 ## Development
 
 ```bash
-npm --prefix web run dev
-npm run dev
+npm run web:dev   # Frontend dev server
+npm run dev       # Proxy (node --watch auto-restart)
 ```

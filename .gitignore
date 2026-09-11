@@ -27,10 +27,10 @@ temp/
 # Captured CLI traffic (contains upstream auth headers — must never be published)
 captured-requests/
 
-# Local agent / tooling state
+# Local agent / tooling state（AGENTS.md 为项目维护指南，需要入库）
 .omo/
 .agents/
-AGENTS.md
+!AGENTS.md
 
 # Archives
 *.zip

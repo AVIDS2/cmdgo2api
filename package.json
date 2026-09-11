@@ -21,6 +21,10 @@
     "start": "node proxy.mjs",
     "dev": "node --watch proxy.mjs",
     "test": "node --test",
+    "build": "npm run web:install && npm run web:build",
+    "web:install": "npm --prefix web ci --ignore-scripts --no-audit --no-fund",
+    "web:build": "npm --prefix web run build",
+    "web:dev": "npm --prefix web run dev",
     "docker:build": "docker build -t commandcode-proxy:latest .",
     "docker:build:multi": "docker buildx build --platform linux/amd64,linux/arm64 -t commandcode-proxy:latest ."
   },
