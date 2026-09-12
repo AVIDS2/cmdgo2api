@@ -418,6 +418,52 @@ function normalizeUsage({ whoami, credits, subscription, summary }) {
 
 const USAGE_QUOTA_KEYS = ['fiveHour', 'weekly', 'monthly'];
 
+// 上游额度错误的文案匹配。临时 429 不应触发切号，只有明确的额度耗尽才切换。
+const QUOTA_LIMIT_MESSAGE_PATTERNS = [
+  /usage limit for your plan/i,
+  /(?:reached|hit|exceeded)[^.]{0,40}(?:5[ -]?hour|five[ -]?hour|weekly|daily|monthly|month)[^.]{0,30}limit/i,
+  /(?:5[ -]?hour|five[ -]?hour|weekly|daily|monthly|month)[^.]{0,30}(?:usage )?limit (?:reached|exceeded)/i,
+  /insufficient credits/i,
+  /premium credits?[^.]{0,20}(?:exhausted|used up)/i,
+  /spend(?:ing)? limit (?:reached|exceeded)/i,
+];
+
+function quotaWindowKey(value) {
+  const window = text(value).toLowerCase().replaceAll('_', '-');
+  if (['fivehour', 'five-hour', '5-hour', '5hour', 'daily', 'day'].includes(window)) return 'fiveHour';
+  if (['weekly', 'week'].includes(window)) return 'weekly';
+  if (['monthly', 'month'].includes(window)) return 'monthly';
+  return null;
+}
+
+function quotaWindowFromMessage(message) {
+  if (/weekly/i.test(message)) return 'weekly';
+  if (/month(?:ly)?/i.test(message)) return 'monthly';
+  if (/credits?|spend/i.test(message)) return 'monthly';
+  return 'fiveHour';
+}
+
+function quotaResetAtMs({ rateLimit, message }) {
+  if (finiteNumber(rateLimit?.reset) !== null) return Number(rateLimit.reset) * 1000;
+  const match = text(message).match(/resets? at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i);
+  if (!match) return null;
+  const parsed = Date.parse(match[1]);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+// 返回 null 表示普通错误，不应触发账号切换。
+export function parseUpstreamQuotaLimit({ message, rateLimit } = {}) {
+  const rawMessage = text(message);
+  const structuredWindow = quotaWindowKey(rateLimit?.window);
+  const messageMatched = QUOTA_LIMIT_MESSAGE_PATTERNS.some((pattern) => pattern.test(rawMessage));
+  if (!structuredWindow && !messageMatched) return null;
+  return {
+    window: structuredWindow || quotaWindowFromMessage(rawMessage),
+    model: text(rateLimit?.model) || null,
+    resetAtMs: quotaResetAtMs({ rateLimit, message: rawMessage }),
+  };
+}
+
 function quotaKnown(quota, key) {
   if (!isObject(quota)) return false;
   if (hasOwn(quota, 'known')) return quota.known === true;
@@ -941,6 +987,34 @@ export function createAdminController({
       previousAccountId: accountId,
       account: activeAccount(),
     };
+  }
+
+  // 请求过程中命中额度窗口时立即切换，不必等待控制台的定时用量刷新。
+  function handleUpstreamQuotaLimit(info) {
+    const limit = parseUpstreamQuotaLimit(info || {});
+    if (!limit) return { detected: false, switched: false };
+    const current = activeAccount();
+    if (!current) return { detected: true, switched: false, window: limit.window, resetAt: limit.resetAtMs };
+    // 同一次失败请求可能产生多个错误事件；切号后的迟到事件不能误伤新账号。
+    if (info?.apiKey && current.apiKey !== info.apiKey) {
+      return { detected: true, switched: false, stale: true, window: limit.window, resetAt: limit.resetAtMs };
+    }
+    markQuotaExhausted(current.id, limit.window);
+    const switchResult = autoSwitchExhaustedAccount(current.id);
+    return { detected: true, window: limit.window, resetAt: limit.resetAtMs, ...switchResult };
+  }
+
+  function markQuotaExhausted(accountId, quotaKey) {
+    if (!quotaKey) return;
+    updateAccount(accountId, (account) => {
+      const usage = isObject(account.usage) ? account.usage : {};
+      const quota = isObject(usage[quotaKey]) ? usage[quotaKey] : {};
+      return {
+        ...account,
+        usage: { ...usage, [quotaKey]: { ...quota, known: true, exceeded: true } },
+        usageError: '',
+      };
+    });
   }
 
   function initializeAccountStore() {
@@ -1598,6 +1672,7 @@ export function createAdminController({
       sendText(response, 404, '控制台页面不存在');
       return true;
     },
+    handleUpstreamQuotaLimit,
   };
 }
 

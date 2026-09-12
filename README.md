@@ -138,6 +138,7 @@ The console is available at `/console`; its management API is under `/admin/api`
 - Add or delete gateway keys without restarting the process. The first key can also be replaced, which invalidates console sessions.
 - Use **Browser login** to store multiple Command Code account tokens locally. The account list supports one-click switching, deletion, and refreshing all accounts; each row shows only the remaining five-hour, weekly, and total quotas. Switching updates the proxy's active upstream token immediately without a restart.
 - When any of the active account's five-hour, weekly, or monthly quotas reaches 100%, the console automatically selects the next account in list order whose three quota values are known and not full; it wraps to the beginning, and skips accounts with unknown or failed usage data.
+- If an upstream response explicitly reports that an account quota window is exhausted, the proxy marks that account and switches immediately; ordinary temporary `429` responses do not trigger a switch.
 - The model manager reads the full catalog from the upstream Provider API. All models are allowed by default; saved restrictions hide models from `/v1/models` and return `HTTP 403` for direct calls.
 - Usage refreshes in the background every 60 seconds while the console is open.
 - Update and restart runs only when the Git worktree is clean, using `git pull --ff-only`, frontend dependency installation, and a production build. Local changes are refused rather than overwritten.
@@ -265,6 +266,7 @@ Anthropic Messages API compatible endpoint. Supports streaming, non-streaming, a
 | Tool definitions | `input_schema` | Auto-mapped to `parameters` |
 | `tool_choice` | `{type:"auto"/"any"/"tool"}` | `any`→`required`, `tool`→function object |
 | Reasoning | `thinking.budget_tokens` | Auto-mapped to `reasoning_effort` (≥10000→high, ≥5000→medium, ≥2000→low) |
+| Assistant reasoning | `reasoning_content` | Preserved on subsequent tool/result turns for thinking-mode upstream validation |
 | Stop reason | `end_turn`/`max_tokens`/`tool_use` | Auto-mapped to `stop`/`length`/`tool_calls` |
 | Token usage | `input_tokens`/`output_tokens` + cache | Passed through, cache fields mapped to Anthropic format |
 

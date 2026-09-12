@@ -7,7 +7,7 @@ RUN npm --prefix web run build
 
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json config.json proxy.mjs ./
+COPY package.json config.json proxy.mjs message-utils.mjs ./
 COPY web/admin.mjs ./web/admin.mjs
 COPY tools ./tools
 COPY --from=web-build /build/web/dist ./web/dist

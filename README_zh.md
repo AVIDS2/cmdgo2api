@@ -136,6 +136,7 @@ header。该开关只是请求 Command Code 使用 ZDR-only 路由，实际数�
 - 可以添加多个网关密钥，也可以删除任意密钥；删除最后一个密钥后会回到首次设置页面。
 - 可通过“浏览器登录”暂存多个 Command Code 账号 token，账号列表支持一键切换、删除和刷新全部账号用量；每个账号右侧只显示 5 小时、一周、总额度的剩余值。切换账号会立即更新代理使用的上游 token，不需要重启。
 - 当前账号的 5 小时、一周或本月额度任一达到 100% 时，如果列表中存在三类额度都未满且数据完整的账号，会按列表顺序自动切换到后续可用账号；到达列表末尾后会从头循环查找，额度未知或同步失败的账号不会被选中。
+- 如果上游响应明确表示当前账号的额度窗口已耗尽，代理会立即标记该账号并切换；普通临时 `429` 不会触发切号。
 - 模型设置会从上游 Provider API 拉取完整目录。默认全部允许；取消选择并保存后，`/v1/models` 会隐藏对应模型，实际请求返回 `HTTP 403`。
 - 用量在控制台存活期间每 60 秒后台异步刷新一次。
 - “更新项目并重启”只在 Git 工作树干净时执行 `git pull --ff-only`、前端安装和构建；检测到本地改动会停止，不会覆盖文件。
@@ -269,6 +270,7 @@ Anthropic Messages API 兼容端点。支持流式和非流式、工具调用。
 | 工具定义        | `input_schema`                              | 自动映射为`parameters`                                                     |
 | `tool_choice` | `{type:"auto"/"any"/"tool"}`                | `any`→`required`，`tool`→function 对象                               |
 | 推理强度        | `thinking.budget_tokens`                    | 自动映射为`reasoning_effort`（≥10000→high, ≥5000→medium, ≥2000→low） |
+| Assistant 推理内容 | `reasoning_content`                       | 在后续工具/结果轮次中保留，满足上游 thinking 模式校验             |
 | 停止原因        | `end_turn`/`max_tokens`/`tool_use`      | 自动映射为`stop`/`length`/`tool_calls`                                 |
 | Token 用量      | `input_tokens`/`output_tokens` + 缓存     | 透传，缓存字段映射为 Anthropic 格式                                          |
 
