@@ -426,6 +426,19 @@ Anthropic SDK 通过 `x-api-key` 头鉴权——代理已原生支持（无需 `
 }
 ```
 
+### Claude Code
+
+Claude Code 使用 Anthropic Messages API。`ANTHROPIC_BASE_URL` 填代理根地址，**不要追加 `/v1`**，Claude Code 会自动请求 `/v1/messages`：
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3050"
+$env:ANTHROPIC_API_KEY = "<网关密钥>"
+$env:ANTHROPIC_MODEL = "meta/muse-spark-1.3-contributor"
+claude
+```
+
+代理支持 Claude Code 的 `thinking`、`output_config.effort`、工具调用和思考块回传；`low`/`medium`/`high`/`max` 会映射为上游 `reasoning_effort`。如果使用其他模型，只需替换 `ANTHROPIC_MODEL` 为 `/v1/models` 中的模型 ID。
+
 ## 反检测
 
 基于对官方 CLI 网络流量的分析（版本号从 npm registry 动态拉取），实现了以下兼容适配：

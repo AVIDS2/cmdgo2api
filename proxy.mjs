@@ -1557,11 +1557,16 @@ function convertAnthropicToOpenAI(anthropicReq) {
   for (const msg of messages) {
     if (msg.role === 'assistant') {
       let textContent = '';
+      let reasoningContent = '';
       const toolCalls = [];
       const blocks = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content || '' }];
       for (const block of blocks) {
         if (block.type === 'text') {
           textContent += block.text || '';
+        } else if (block.type === 'thinking') {
+          // Claude Code replays thinking blocks on tool-result turns. The
+          // Command Code protocol accepts the equivalent OpenAI field.
+          reasoningContent += block.thinking || '';
         } else if (block.type === 'tool_use') {
           toolNameFromId[block.id] = block.name;
           toolCalls.push({
@@ -1575,6 +1580,7 @@ function convertAnthropicToOpenAI(anthropicReq) {
         }
       }
       const assistantMsg = { role: 'assistant', content: textContent || null };
+      if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
       if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
       openaiMessages.push(assistantMsg);
     } else if (msg.role === 'user') {
@@ -1644,6 +1650,9 @@ function convertAnthropicToOpenAI(anthropicReq) {
     } else if (tc.type === 'none') {
       openaiReq.tool_choice = 'none';
     }
+    if (tc.disable_parallel_tool_use !== undefined) {
+      openaiReq.parallel_tool_calls = !tc.disable_parallel_tool_use;
+    }
   }
 
   // 6. Optional params
@@ -1657,8 +1666,11 @@ function convertAnthropicToOpenAI(anthropicReq) {
     const t = anthropicReq.thinking;
     if (t.type === 'disabled' || t.type === 'none') {
       // 不发送 reasoning_effort
+    } else if (anthropicReq.output_config?.effort || t.effort) {
+      // Claude Code's adaptive thinking sends the effort in output_config.
+      openaiReq.reasoning_effort = anthropicReq.output_config?.effort ?? t.effort;
     } else if (t.type === 'adaptive') {
-      openaiReq.reasoning_effort = t.effort ?? 'medium';
+      openaiReq.reasoning_effort = 'medium';
     } else if (t.budget_tokens !== undefined) {
       if (t.budget_tokens >= 10000) openaiReq.reasoning_effort = 'high';
       else if (t.budget_tokens >= 5000) openaiReq.reasoning_effort = 'medium';

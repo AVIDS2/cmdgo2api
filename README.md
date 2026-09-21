@@ -414,6 +414,19 @@ The Anthropic SDK authenticates via the `x-api-key` header — supported by the 
 }
 ```
 
+### Claude Code
+
+Claude Code uses the Anthropic Messages API. Set `ANTHROPIC_BASE_URL` to the proxy root, **without `/v1`**; Claude Code appends `/v1/messages` itself:
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3050"
+$env:ANTHROPIC_API_KEY = "<gateway-key>"
+$env:ANTHROPIC_MODEL = "meta/muse-spark-1.3-contributor"
+claude
+```
+
+The proxy supports Claude Code `thinking`, `output_config.effort`, tool calls, and replayed thinking blocks. `low`/`medium`/`high`/`max` are mapped to upstream `reasoning_effort`. Replace `ANTHROPIC_MODEL` with any model ID returned by `/v1/models`.
+
 ## Anti-Detection
 
 Based on analysis of official CLI traffic (version auto-fetched from npm registry):
